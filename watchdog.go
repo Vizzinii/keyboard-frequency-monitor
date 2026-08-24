@@ -29,6 +29,14 @@ func NewHealth() *Health {
 	return &Health{mu: &sync.Mutex{}, Status: "ok", Uptime: time.Now()}
 }
 
+// setOff 标记看门狗未运行（-watchdog-off）。没有它状态会停在初始的 "ok"，
+// 托盘和面板会谎报"记录正常"，而其实没有任何东西在监控钩子。
+func (h *Health) setOff() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.Status, h.Msg = "off", "看门狗已关闭，钩子失效不会自动恢复"
+}
+
 func (h *Health) Snapshot() Health {
 	h.mu.Lock()
 	defer h.mu.Unlock()

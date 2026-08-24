@@ -99,6 +99,7 @@ func main() {
 
 	if *watchdogOff {
 		log.Println("[看门狗] 已关闭（-watchdog-off）")
+		health.setOff() // 否则状态停在初始的 "ok"，托盘会谎报"记录正常"
 	} else {
 		wd := NewWatchdog(rec, health, time.Duration(*watchdogWin)*time.Second, restartAtFromEnv())
 		go wd.Run(func() { selfRestart(store, rec, listenPort) })

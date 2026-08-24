@@ -446,6 +446,7 @@ async function loadHealth() {
       degraded: "🔴 记录异常：自动修复多次未成功，请手动重启程序",
       paused:   "⚪ 记录已暂停 —— 托盘菜单可恢复",
       healed:   "🟢 " + (h.msg || "刚刚自动修复过一次，记录已恢复"),
+      off:      "⚪ 看门狗已关闭（-watchdog-off）—— 钩子失效不会自动恢复",
     }[h.status];
     el.style.display = text ? "block" : "none";
     el.className = h.status === "degraded" ? "bad" : "";

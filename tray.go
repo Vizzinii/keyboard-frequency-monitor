@@ -54,6 +54,7 @@ func runTray(panelURL string, rec *Recorder, health *Health) {
 				"healed":   "记录：正常（曾自愈）",
 				"paused":   "记录：已暂停",
 				"degraded": "记录：异常（需手动重启）",
+				"off":      "记录：看门狗已关闭",
 			}
 			for {
 				h := health.Snapshot()
