@@ -1,21 +1,13 @@
-//go:build windows
-
 package main
 
-import (
-	_ "embed"
+import "github.com/energye/systray"
 
-	"github.com/energye/systray"
-)
-
-//go:embed assets/icon.ico
-var iconICO []byte
-
-// runTray 阻塞运行托盘，直到用户点击“退出”。
+// runTray 阻塞运行托盘/菜单栏图标，直到用户点击“退出”。
 // 左键单击图标直接打开面板；右键弹出菜单。
+// 图标字节由 icon_windows.go / icon_darwin.go 提供（mac 的 NSImage 不吃 ICO）。
 func runTray(panelURL string, rec *Recorder) {
 	systray.Run(func() {
-		systray.SetIcon(iconICO)
+		systray.SetIcon(trayIcon)
 		systray.SetTooltip("键盘频率监视器")
 		systray.SetOnClick(func(_ systray.IMenu) {
 			openInBrowser(panelURL)

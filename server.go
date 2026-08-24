@@ -13,11 +13,12 @@ import (
 var dashboardHTML []byte
 
 // startServer 只监听 127.0.0.1，从 want 端口开始找第一个可用的。
+// 返回 (监听端口, 已有实例端口)：监听端口为 0 表示没起来。
 // 绑定前先探测是否已有本程序实例在跑——否则第二个实例会换个端口
 // 继续跑并再装一个钩子，导致每个按键被计两次。
-func startServer(s *Store, want int) (*http.Server, int, int) {
+func startServer(s *Store, want int) (int, int) {
 	if p := probeExisting(want); p != 0 {
-		return nil, 0, p
+		return 0, p
 	}
 	mux := http.NewServeMux()
 
@@ -53,9 +54,9 @@ func startServer(s *Store, want int) (*http.Server, int, int) {
 		}
 		srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 		go func() { _ = srv.Serve(ln) }() // 进程退出即结束，无需优雅关闭
-		return srv, p, 0
+		return p, 0
 	}
-	return nil, 0, probeExisting(want)
+	return 0, probeExisting(want)
 }
 
 func probeExisting(want int) int {

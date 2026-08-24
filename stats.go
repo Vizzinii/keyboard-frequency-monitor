@@ -1,20 +1,22 @@
 package main
 
 import (
+	"runtime"
 	"time"
 )
 
 // StatsPayload 的字段结构与网页面板的 JS 约定一致：
 // keys/days 是 [名称, 数值] 数组，hours 是 24 个整数。
 type StatsPayload struct {
-	Range    string   `json:"range"`
-	Total    int64    `json:"total"`
-	Distinct int      `json:"distinct"`
-	Since    *string  `json:"since"`
-	Keys     [][]any  `json:"keys"`
-	Days     [][]any  `json:"days"`
-	Hours    []int64  `json:"hours"`
-	Now      string   `json:"now"`
+	Range    string  `json:"range"`
+	Total    int64   `json:"total"`
+	Distinct int     `json:"distinct"`
+	Since    *string `json:"since"`
+	Keys     [][]any `json:"keys"`
+	Days     [][]any `json:"days"`
+	Hours    []int64 `json:"hours"`
+	Now      string  `json:"now"`
+	OS       string  `json:"os"` // 面板据此把修饰键显示成 ⌘/⌥/⌃ 或 Win/Alt/Ctrl
 }
 
 func rangeStart(rng string) string {
@@ -50,11 +52,12 @@ func BuildStats(s *Store, rng string) (StatsPayload, error) {
 
 	var total int64
 	payload := StatsPayload{
-		Range:    rng,
-		Since:    since,
-		Hours:    hours[:],
-		Keys:     make([][]any, 0, len(keys)),
-		Now:      time.Now().Format("15:04:05"),
+		Range: rng,
+		Since: since,
+		Hours: hours[:],
+		Keys:  make([][]any, 0, len(keys)),
+		Now:   time.Now().Format("15:04:05"),
+		OS:    runtime.GOOS,
 	}
 	for _, kc := range keys {
 		total += kc.Count

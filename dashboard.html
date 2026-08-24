@@ -326,6 +326,12 @@ function heatColor(ratio) {
            fg: l > 36 ? "#0e2019" : "#eef4f0" };
 }
 
+// mac 的修饰键键帽与 Windows 不同（且底排物理顺序是 ctrl/alt/cmd）。
+// 只换文字，布局不动。
+const MAC_CAPS = {ctrl:"⌃", ctrl_r:"⌃", cmd:"⌘", cmd_r:"⌘",
+                  alt:"⌥", alt_r:"⌥", backspace:"⌫", menu:"fn"};
+const capFor = (cap, name, isMac) => (isMac && MAC_CAPS[name]) || cap;
+
 function render(d) {
   lastData = d;
   const map = Object.fromEntries(d.keys);
@@ -354,11 +360,13 @@ function render(d) {
     `<div class="v">${t.v}${t.s ? `<small>${t.s}</small>` : ""}</div></div>`).join("");
 
   // ---- 热力图 ----
+  const isMac = d.os === "darwin";
   const shown = new Set();
   let html = "";
   for (const row of LAYOUT) {
     html += '<div class="krow">';
-    for (const [cap, names, u] of row) {
+    for (const [cap0, names, u] of row) {
+      const cap = capFor(cap0, names[0], isMac);
       const c = names.reduce((s,n)=> s + (map[n]||0), 0);
       names.forEach(n=>shown.add(n));
       if (c > 0 && max > 0) {

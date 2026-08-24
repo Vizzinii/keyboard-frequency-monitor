@@ -10,15 +10,17 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 const S = 256
 
 var (
-	bg     = color.RGBA{R: 18, G: 21, B: 27, A: 255}      // 深底
-	keyHi  = color.RGBA{R: 216, G: 222, B: 232, A: 235}   // 亮键帽
-	keyLo  = color.RGBA{R: 216, G: 222, B: 232, A: 130}   // 暗键帽
-	accent = color.RGBA{R: 79, G: 140, B: 255, A: 255}    // 主题蓝
+	bg     = color.RGBA{R: 18, G: 21, B: 27, A: 255}    // 深底
+	keyHi  = color.RGBA{R: 216, G: 222, B: 232, A: 235} // 亮键帽
+	keyLo  = color.RGBA{R: 216, G: 222, B: 232, A: 130} // 暗键帽
+	accent = color.RGBA{R: 79, G: 140, B: 255, A: 255}  // 主题蓝
 )
 
 func fillRect(img *image.RGBA, x0, y0, w, h int, c color.RGBA) {
@@ -59,9 +61,13 @@ func main() {
 		panic(err)
 	}
 
-	var f *os.File
-	var err error
-	f, err = os.Create(out)
+	// macOS 菜单栏用 PNG（NSImage 不解析 ICO 容器），与 ICO 同源同图
+	pngOut := strings.TrimSuffix(out, filepath.Ext(out)) + ".png"
+	if err := os.WriteFile(pngOut, pngBuf.Bytes(), 0o644); err != nil {
+		panic(err)
+	}
+
+	f, err := os.Create(out)
 	if err != nil {
 		panic(err)
 	}
@@ -83,5 +89,5 @@ func main() {
 	if _, err := f.Write(pngBuf.Bytes()); err != nil {
 		panic(err)
 	}
-	fmt.Println("已生成", out)
+	fmt.Println("已生成", out, "和", pngOut)
 }

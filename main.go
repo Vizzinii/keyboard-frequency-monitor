@@ -1,5 +1,3 @@
-//go:build windows
-
 package main
 
 import (
@@ -54,8 +52,8 @@ func main() {
 		return
 	}
 
-	srv, listenPort, existing := startServer(store, *port)
-	if srv == nil {
+	listenPort, existing := startServer(store, *port)
+	if listenPort == 0 {
 		if existing != 0 {
 			fmt.Println("已有实例正在运行，直接打开它的面板。")
 			openInBrowser(fmt.Sprintf("http://127.0.0.1:%d/", existing))
@@ -68,7 +66,9 @@ func main() {
 	rec := NewRecorder()
 	hooks, err := rec.StartHooks()
 	if err != nil {
-		log.Fatalf("安装钩子失败: %v", err)
+		// macOS 未授权“输入监控”时是一段给用户看的指引，不该带 log 前缀
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	defer hooks.Stop()
 
