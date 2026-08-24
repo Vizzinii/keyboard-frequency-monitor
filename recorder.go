@@ -39,6 +39,20 @@ type Recorder struct {
 	threadID     uintptr
 	threadDone   chan struct{} // 消息泵线程退出时关闭
 	lastActivity atomic.Int64  // 钩子最近一次"看到输入"的时间（含鼠标移动/滚轮，仅用于看门狗）
+
+	// abortGen 是安装代际号：每次 install 递增；超时或被并发重装取代时也递增，
+	// 迟到的安装线程凭它判断自己是否已作废——作废则当场卸钩退出，绝不发布句柄，
+	// 杜绝"新旧两代钩子并存 → 每个按键被计多次"。
+	abortGen uint64
+
+	drainMu sync.Mutex // 串行化 Drain，防止退出收尾与 flushLoop 并发争抢事件
+	pendingMu sync.Mutex
+	pending   map[string]int // 落盘失败暂存的事件，下轮重试
+
+	// 测试注入：钩子安装/卸载的底层调用，默认走真实 syscall；
+	// 单测用假实现模拟"SetWindowsHookEx 卡住后迟到返回"，验证代际作废路径。
+	setHookFn func(hookType int, cb uintptr) (uintptr, error)
+	unhookFn  func(handle uintptr)
 }
 
 type Hooks struct{ r *Recorder }
@@ -52,6 +66,11 @@ func (h *Hooks) Stop() {
 
 func NewRecorder() *Recorder {
 	r := &Recorder{ch: make(chan string, eventBuffer)}
+	r.setHookFn = func(hookType int, cb uintptr) (uintptr, error) {
+		h, _, e := setHook.Call(uintptr(hookType), cb, 0, 0)
+		return h, e
+	}
+	r.unhookFn = func(h uintptr) { unhook.Call(h) }
 	now := time.Now().Unix()
 	r.lastEvent.Store(now)
 	r.lastActivity.Store(now)
@@ -131,14 +150,27 @@ func isClosed(ch chan struct{}) bool {
 }
 
 // install 安装钩子并启动消息泵线程；可重复调用。
-// 细节：先停掉上一代钩子（卸钩 + WM_QUIT），再起新线程；
-// 旧线程退出时只关闭它自己那一代的 threadDone，绝不触碰新线程的字段。
+// 细节：先停掉上一代钩子（卸钩 + WM_QUIT），等上一代线程真正退出后再起新线程；
+// 通过 abortGen 代际号保证：超时或并发重装时，迟到的安装完成会被作废并自卸钩，
+// 绝不与新一代钩子并存（并存会让每个按键被计多次）。
 func (r *Recorder) install() error {
 	r.mu.Lock()
 	r.stopLocked()
+	r.abortGen++ // 作废上一代可能迟到的安装完成
+	gen := r.abortGen
+	prevDone := r.threadDone
 	done := make(chan struct{})
 	r.threadDone = done
 	r.mu.Unlock()
+
+	if prevDone != nil {
+		// 等上一代消息泵线程真正退出再装新钩子：旧线程队列里残留的钩子消息
+		// 不会再派发到旧回调，避免新旧两代短暂并存重复计数。限时以防卡死。
+		select {
+		case <-prevDone:
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -148,27 +180,43 @@ func (r *Recorder) install() error {
 		tid, _, _ := getCurrentTID.Call()
 
 		kbCb := syscall.NewCallback(r.kbdProc)
-		kh, _, kerr := setHook.Call(whKeyboardLL, kbCb, 0, 0)
+		kh, kerr := r.setHookFn(whKeyboardLL, uintptr(kbCb))
 		if kh == 0 {
 			errCh <- fmt.Errorf("SetWindowsHookEx(键盘): %v", kerr)
 			return
 		}
 		msCb := syscall.NewCallback(r.mouseProc)
-		mh, _, merr := setHook.Call(whMouseLL, msCb, 0, 0)
+		mh, merr := r.setHookFn(whMouseLL, uintptr(msCb))
 		if mh == 0 {
-			unhook.Call(kh) // 键盘钩子已装上但整体失败，卸掉
+			r.unhookFn(kh) // 键盘钩子已装上但整体失败，卸掉
 			errCh <- fmt.Errorf("SetWindowsHookEx(鼠标): %v", merr)
 			return
 		}
 
 		r.mu.Lock()
-		r.threadID = tid
-		r.keyboard = windows.Handle(kh)
-		r.mouse = windows.Handle(mh)
+		keep := gen == r.abortGen // 未被超时/并发重装作废才发布句柄
+		if keep {
+			r.threadID = tid
+			r.keyboard = windows.Handle(kh)
+			r.mouse = windows.Handle(mh)
+		}
 		r.mu.Unlock()
+		if !keep { // 迟到的完成：卸掉自己的钩子，不留孤儿代
+			r.unhookFn(kh)
+			r.unhookFn(mh)
+			errCh <- fmt.Errorf("安装已被更新的请求取代")
+			return
+		}
 		r.lastActivity.Store(time.Now().Unix())
 
 		errCh <- nil
+
+		r.mu.Lock()
+		alive := gen == r.abortGen // 若超时已作废本代，则不再进消息泵
+		r.mu.Unlock()
+		if !alive {
+			return
+		}
 
 		var m winMsg
 		for {
@@ -185,6 +233,12 @@ func (r *Recorder) install() error {
 			return err
 		}
 	case <-time.After(3 * time.Second):
+		// 超时：作废这代安装并清掉已发布的部分句柄；迟到的 goroutine
+		// 恢复后会自查代际号、自卸钩退出，不会留下孤儿钩子。
+		r.mu.Lock()
+		r.abortGen++
+		r.stopLocked()
+		r.mu.Unlock()
 		return fmt.Errorf("安装钩子超时")
 	}
 	return nil
@@ -194,11 +248,11 @@ func (r *Recorder) install() error {
 // 先卸钩再发 WM_QUIT，保证新旧两代钩子不会短暂并存重复计数。
 func (r *Recorder) stopLocked() {
 	if r.keyboard != 0 {
-		unhook.Call(uintptr(r.keyboard))
+		r.unhookFn(uintptr(r.keyboard))
 		r.keyboard = 0
 	}
 	if r.mouse != 0 {
-		unhook.Call(uintptr(r.mouse))
+		r.unhookFn(uintptr(r.mouse))
 		r.mouse = 0
 	}
 	if r.threadID != 0 {
@@ -257,7 +311,11 @@ func (r *Recorder) mouseProc(ncode, wparam, lparam uintptr) uintptr {
 }
 
 // Drain 取走缓冲里的全部事件并聚合成 键名->次数。
+// 串行化保证：退出收尾（selfRestart / 托盘退出）与每秒 flushLoop 并发调用时，
+// 不会出现一方取走事件、另一方永久阻塞等待或重复计数的竞态。
 func (r *Recorder) Drain() map[string]int {
+	r.drainMu.Lock()
+	defer r.drainMu.Unlock()
 	n := len(r.ch)
 	out := make(map[string]int, min(n, 128))
 	for range n {
@@ -267,4 +325,42 @@ func (r *Recorder) Drain() map[string]int {
 		r.lastEvent.Store(time.Now().Unix())
 	}
 	return out
+}
+
+// HasPending 报告是否有落盘失败暂存的事件。
+func (r *Recorder) HasPending() bool {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	return len(r.pending) > 0
+}
+
+// mergePending 把暂存事件并入本次待写批次并清空暂存。
+func (r *Recorder) mergePending(labels map[string]int) map[string]int {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	if len(r.pending) == 0 {
+		return labels
+	}
+	if labels == nil {
+		labels = make(map[string]int, len(r.pending))
+	}
+	for k, v := range r.pending {
+		labels[k] += v
+	}
+	r.pending = nil
+	return labels
+}
+
+// retainPending 落盘失败时暂存整批事件，下一轮 flushOnce 重试。
+// 按键名归并，长时间故障下暂存量也有界。
+func (r *Recorder) retainPending(labels map[string]int) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	if r.pending == nil {
+		r.pending = labels
+		return
+	}
+	for k, v := range labels {
+		r.pending[k] += v
+	}
 }

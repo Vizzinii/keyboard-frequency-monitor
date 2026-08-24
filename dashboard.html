@@ -459,6 +459,9 @@ async function loadHealth() {
     } else if (h.status === "paused") {
       bar.className = "paused"; bar.style.display = "block";
       bar.textContent = "⏸ 记录已暂停（托盘菜单可恢复）。";
+    } else if (h.status === "off") {
+      bar.className = "paused"; bar.style.display = "block";
+      bar.textContent = "🛠 看门狗已关闭（启动参数 -watchdog-off），钩子失效时不会自动修复。";
     } else if (h.status === "healed" ||
                (h.lastHeal && Date.now() - new Date(h.lastHeal).getTime() < 10 * 60 * 1000)) {
       bar.className = ""; bar.style.display = "block";

@@ -20,7 +20,7 @@ var dashboardHTML []byte
 func startServer(s *Store, h *Health, want int, restart bool) (*http.Server, int, int) {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, req *http.Request) {
+	mux.HandleFunc("/api/stats", withMarker(func(w http.ResponseWriter, req *http.Request) {
 		rng := req.URL.Query().Get("range")
 		if rng != "today" && rng != "week" && rng != "all" {
 			rng = "today"
@@ -33,15 +33,15 @@ func startServer(s *Store, h *Health, want int, restart bool) (*http.Server, int
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(payload)
-	})
+	}))
 
-	mux.HandleFunc("/api/health", func(w http.ResponseWriter, req *http.Request) {
+	mux.HandleFunc("/api/health", withMarker(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(h.Snapshot())
-	})
+	}))
 
-	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+	mux.HandleFunc("/", withMarker(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/" && req.URL.Path != "/index.html" {
 			http.NotFound(w, req)
 			return
@@ -49,7 +49,7 @@ func startServer(s *Store, h *Health, want int, restart bool) (*http.Server, int
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(dashboardHTML)
-	})
+	}))
 
 	if !restart {
 		if p := probeExisting(want); p != 0 {
@@ -82,12 +82,26 @@ func serve(mux *http.ServeMux, ln net.Listener) *http.Server {
 	return srv
 }
 
+// withMarker 给响应加本程序标识头，probeExisting 凭它识别"这是本程序"，
+// 避免把同端口上的其他 HTTP 服务误认成已有实例。
+func withMarker(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("X-KFM", "1")
+		h(w, req)
+	}
+}
+
+// probeExisting 探测 want~want+9 上是否有本程序实例（响应带 X-KFM 标记才算）。
 func probeExisting(want int) int {
 	client := &http.Client{Timeout: time.Second}
 	for p := want; p < want+10; p++ {
 		resp, err := client.Get("http://127.0.0.1:" + strconv.Itoa(p) + "/api/stats?range=all")
-		if err == nil {
-			resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		hit := resp.Header.Get("X-KFM") == "1"
+		resp.Body.Close()
+		if hit {
 			return p
 		}
 	}

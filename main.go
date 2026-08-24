@@ -28,10 +28,29 @@ func main() {
 	export := flag.String("export", "", "导出全部统计为 CSV 到指定文件后退出")
 	openPanel := flag.Bool("open-panel", true, "启动时自动在浏览器打开面板")
 	noTray := flag.Bool("no-tray", false, "不显示托盘图标（调试用，Ctrl+C 退出）")
+	noHooks := flag.Bool("no-hooks", false, "内部：不安装全局钩子（e2e 测试用，需配合 -watchdog-off）")
 	restart := flag.Bool("restart", false, "内部：自动重启时由旧实例拉起，跳过已有实例检测")
 	watchdogOff := flag.Bool("watchdog-off", false, "关闭钩子看门狗（调试用）")
 	watchdogWin := flag.Int("watchdog-win", 60, "看门狗判定窗口（秒）：该时长内无钩子事件且系统有输入则重装钩子")
 	flag.Parse()
+
+	// 单实例仲裁：已有实例在跑时直接打开它的面板退出，避免两个进程各装一套
+	// 钩子导致每个按键被计两次。-restart 是老实例拉起新实例的接管流程
+	// （老实例已退出），跳过仲裁。
+	if !*restart {
+		si, err := acquireSingleInstance()
+		if err != nil {
+			log.Fatalf("单实例互斥体创建失败: %v", err)
+		}
+		if si == nil {
+			if *reset {
+				log.Fatalf("已有实例正在运行，请先退出它再执行 -reset（否则清不掉被占用的数据库文件）")
+			}
+			openExistingPanel(*port)
+			return
+		}
+		defer si.release()
+	}
 
 	exePath, err := os.Executable()
 	if err != nil {
@@ -41,7 +60,7 @@ func main() {
 	dbPath := filepath.Join(exeDir, "keyboard_stats.db")
 
 	// 日志同时输出到控制台和 exe 目录的 monitor.log，自愈/重启事件有据可查
-	if lf, err := os.OpenFile(filepath.Join(exeDir, "monitor.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+	if lf, err := openLogAppend(filepath.Join(exeDir, "monitor.log")); err == nil {
 		defer lf.Close()
 		log.SetOutput(io.MultiWriter(os.Stderr, lf))
 	}
@@ -49,7 +68,9 @@ func main() {
 	if *reset {
 		for _, suf := range []string{"", "-wal", "-shm"} {
 			if p := dbPath + suf; fileExists(p) {
-				os.Remove(p)
+				if err := os.Remove(p); err != nil {
+					log.Fatalf("清空统计数据失败：%v（请先退出正在运行的实例）", err)
+				}
 			}
 		}
 		log.Println("[已清空所有统计数据]")
@@ -90,16 +111,23 @@ func main() {
 	panelURL := fmt.Sprintf("http://127.0.0.1:%d/", listenPort)
 
 	rec := NewRecorder()
-	hooks, err := rec.StartHooks()
-	if err != nil {
-		log.Fatalf("安装钩子失败: %v", err)
+	if *noHooks {
+		log.Println("[钩子] 已跳过安装（-no-hooks，仅测试/调试）")
+	} else {
+		hooks, err := rec.StartHooks()
+		if err != nil {
+			log.Fatalf("安装钩子失败: %v", err)
+		}
+		defer hooks.Stop()
 	}
-	defer hooks.Stop()
 
 	go flushLoop(store, rec)
 
 	if *watchdogOff {
 		log.Println("[看门狗] 已关闭（-watchdog-off）")
+		// 发布 off 状态，托盘菜单与面板能明确显示"看门狗未运行"。
+		// 看门狗 goroutine 不存在，此状态不会被后续 publish 覆盖。
+		health.swap(Health{Status: "off", Msg: "看门狗已关闭（-watchdog-off）"})
 	} else {
 		wd := NewWatchdog(rec, health, time.Duration(*watchdogWin)*time.Second, restartAtFromEnv())
 		go wd.Run(func() { selfRestart(store, rec, listenPort) })
@@ -133,12 +161,14 @@ func flushLoop(store *Store, rec *Recorder) {
 
 func flushOnce(store *Store, rec *Recorder) {
 	labels := rec.Drain()
-	if len(labels) == 0 {
+	if !rec.HasPending() && len(labels) == 0 {
 		return
 	}
+	labels = rec.mergePending(labels)
 	now := time.Now()
 	if err := store.Add(now.Format(dateLayout), now.Hour(), labels); err != nil {
-		log.Println("[警告] 写入失败:", err)
+		rec.retainPending(labels) // 写失败不吞事件，下轮重试
+		log.Println("[警告] 写入失败，事件暂存下轮重试:", err)
 	}
 }
 
@@ -180,9 +210,14 @@ func selfRestart(store *Store, rec *Recorder, port int) {
 // restartArgs 构造自动重启时的命令行：保留用户原参数，但绝不携带 -reset/-export，
 // 强制 -restart 与 -open-panel=false（避免再弹一个浏览器标签页），并把实际端口传下去。
 func restartArgs(port int) []string {
+	return restartArgsFrom(os.Args[1:], port)
+}
+
+// restartArgsFrom 是 restartArgs 的纯函数实现，便于单测。
+func restartArgsFrom(args []string, port int) []string {
 	var out []string
 	skipNext := false
-	for _, a := range os.Args[1:] {
+	for _, a := range args {
 		if skipNext {
 			skipNext = false
 			continue
@@ -215,25 +250,37 @@ func restartAtFromEnv() time.Time {
 	return time.Unix(sec, 0)
 }
 
+// importLegacyJSON 导入旧版 key_counts.json。只有完整导入成功才把源文件改名
+// 归档；读取/解析/落库任一环节失败都保留原文件，下次启动可重试。
 func importLegacyJSON(store *Store, path string) {
 	if !fileExists(path) {
 		return
 	}
 	data, err := os.ReadFile(path)
-	if err == nil {
-		var old struct {
-			Counts map[string]int64 `json:"counts"`
-		}
-		if json.Unmarshal(data, &old) == nil && len(old.Counts) > 0 {
-			total := int64(0)
-			for _, c := range old.Counts {
-				total += c
-			}
-			if err := store.Add("legacy", 0, toIntMap(old.Counts)); err == nil {
-				fmt.Printf("已导入旧版统计 %d 次（保留在“全部”里）\n", total)
-			}
-		}
+	if err != nil {
+		log.Println("[警告] 读取旧版统计失败，保留原文件:", err)
+		return
 	}
+	var old struct {
+		Counts map[string]int64 `json:"counts"`
+	}
+	if err := json.Unmarshal(data, &old); err != nil {
+		log.Println("[警告] 旧版统计无法解析，保留原文件待排查:", err)
+		return
+	}
+	if len(old.Counts) == 0 {
+		os.Rename(path, path+".imported.bak") // 合法空数据，无内容可导入，归档
+		return
+	}
+	total := int64(0)
+	for _, c := range old.Counts {
+		total += c
+	}
+	if err := store.Add("legacy", 0, toIntMap(old.Counts)); err != nil {
+		log.Println("[警告] 旧数据导入失败，保留原文件:", err)
+		return
+	}
+	fmt.Printf("已导入旧版统计 %d 次（保留在“全部”里）\n", total)
 	os.Rename(path, path+".imported.bak")
 }
 
@@ -276,4 +323,28 @@ func exportCSV(store *Store, path string) error {
 func fileExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && !st.IsDir()
+}
+
+// openLogAppend 打开追加日志；超过 5MB 先把旧的轮转为 .1，防止长期运行无限膨胀。
+func openLogAppend(path string) (*os.File, error) {
+	if st, err := os.Stat(path); err == nil && st.Size() > 5<<20 {
+		if err := os.Rename(path, path+".1"); err != nil {
+			log.Printf("日志轮转失败: %v", err) // 不阻塞启动
+		}
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+}
+
+// openExistingPanel 找到已有实例的面板端口并打开；对方可能刚启动、服务未就绪，
+// 短重试后再放弃。带 X-KFM 标记的响应才算本程序实例（见 server.go）。
+func openExistingPanel(want int) {
+	for i := 0; i < 15; i++ {
+		if p := probeExisting(want); p != 0 {
+			fmt.Println("已有实例正在运行，直接打开它的面板。")
+			openInBrowser(fmt.Sprintf("http://127.0.0.1:%d/", p))
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	log.Fatalf("已有实例正在运行，但找不到它的面板端口（端口 %d~%d 无响应）", want, want+9)
 }
