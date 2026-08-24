@@ -7,12 +7,19 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func main() {
@@ -21,6 +28,9 @@ func main() {
 	export := flag.String("export", "", "导出全部统计为 CSV 到指定文件后退出")
 	openPanel := flag.Bool("open-panel", true, "启动时自动在浏览器打开面板")
 	noTray := flag.Bool("no-tray", false, "不显示托盘图标（调试用，Ctrl+C 退出）")
+	restart := flag.Bool("restart", false, "内部：自动重启时由旧实例拉起，跳过已有实例检测")
+	watchdogOff := flag.Bool("watchdog-off", false, "关闭钩子看门狗（调试用）")
+	watchdogWin := flag.Int("watchdog-win", 60, "看门狗判定窗口（秒）：该时长内无钩子事件且系统有输入则重装钩子")
 	flag.Parse()
 
 	exePath, err := os.Executable()
@@ -30,6 +40,12 @@ func main() {
 	exeDir := filepath.Dir(exePath)
 	dbPath := filepath.Join(exeDir, "keyboard_stats.db")
 
+	// 日志同时输出到控制台和 exe 目录的 monitor.log，自愈/重启事件有据可查
+	if lf, err := os.OpenFile(filepath.Join(exeDir, "monitor.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+		defer lf.Close()
+		log.SetOutput(io.MultiWriter(os.Stderr, lf))
+	}
+
 	if *reset {
 		for _, suf := range []string{"", "-wal", "-shm"} {
 			if p := dbPath + suf; fileExists(p) {
@@ -37,6 +53,13 @@ func main() {
 			}
 		}
 		log.Println("[已清空所有统计数据]")
+	}
+
+	if *restart {
+		// 旧实例退出前仍占着端口和数据库，先等它释放再接管
+		if !waitPortFree(*port, 10*time.Second) {
+			log.Fatalf("自动重启：等待端口 %d 释放超时，请手动启动", *port)
+		}
 	}
 
 	store, err := OpenStore(dbPath)
@@ -54,7 +77,8 @@ func main() {
 		return
 	}
 
-	srv, listenPort, existing := startServer(store, *port)
+	health := NewHealth()
+	srv, listenPort, existing := startServer(store, health, *port, *restart)
 	if srv == nil {
 		if existing != 0 {
 			fmt.Println("已有实例正在运行，直接打开它的面板。")
@@ -74,6 +98,13 @@ func main() {
 
 	go flushLoop(store, rec)
 
+	if *watchdogOff {
+		log.Println("[看门狗] 已关闭（-watchdog-off）")
+	} else {
+		wd := NewWatchdog(rec, health, time.Duration(*watchdogWin)*time.Second, restartAtFromEnv())
+		go wd.Run(func() { selfRestart(store, rec, listenPort) })
+	}
+
 	fmt.Println("记录已启动（全局生效），面板地址:", panelURL)
 	fmt.Println("数据每秒落盘，进程被强杀最多丢最后一秒。")
 
@@ -86,7 +117,7 @@ func main() {
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
 	} else {
-		runTray(panelURL, rec)
+		runTray(panelURL, rec, health)
 	}
 
 	flushOnce(store, rec) // 收尾：把最后不足一秒的也写进去
@@ -109,6 +140,79 @@ func flushOnce(store *Store, rec *Recorder) {
 	if err := store.Add(now.Format(dateLayout), now.Hour(), labels); err != nil {
 		log.Println("[警告] 写入失败:", err)
 	}
+}
+
+// waitPortFree 等待指定端口能被本机监听（旧实例退出即释放）；超时返回 false。
+func waitPortFree(port int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	for time.Now().Before(deadline) {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			ln.Close()
+			return true
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return false
+}
+
+// selfRestart 以 -restart 模式拉起新实例（跳过实例探测、接管旧端口），
+// 写掉最后一秒数据后退出本进程。cmd.Start 失败时返回，由看门狗继续降级运行。
+func selfRestart(store *Store, rec *Recorder, port int) {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("[自愈] 无法获取自身可执行文件路径: %v", err)
+		return
+	}
+	cmd := exec.Command(exe, restartArgs(port)...)
+	cmd.Env = append(os.Environ(), "KFM_RESTART_AT="+strconv.FormatInt(time.Now().Unix(), 10))
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_CONSOLE}
+	if err := cmd.Start(); err != nil {
+		log.Printf("[自愈] 拉起新实例失败: %v", err)
+		return
+	}
+	flushOnce(store, rec)
+	log.Printf("[自愈] 已拉起新实例（pid=%d），本进程退出", cmd.Process.Pid)
+	os.Exit(0)
+}
+
+// restartArgs 构造自动重启时的命令行：保留用户原参数，但绝不携带 -reset/-export，
+// 强制 -restart 与 -open-panel=false（避免再弹一个浏览器标签页），并把实际端口传下去。
+func restartArgs(port int) []string {
+	var out []string
+	skipNext := false
+	for _, a := range os.Args[1:] {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		switch {
+		case a == "-reset" || a == "-restart" || a == "-open-panel":
+			continue
+		case a == "-export":
+			skipNext = true
+			continue
+		}
+		if strings.HasPrefix(a, "-export=") || strings.HasPrefix(a, "-open-panel=") {
+			continue
+		}
+		out = append(out, a)
+	}
+	return append(out, "-restart", "-open-panel=false", "-port="+strconv.Itoa(port))
+}
+
+// restartAtFromEnv 读取 KFM_RESTART_AT（自动重启时旧实例注入的环境变量），无则返回零值。
+func restartAtFromEnv() time.Time {
+	s := os.Getenv("KFM_RESTART_AT")
+	if s == "" {
+		return time.Time{}
+	}
+	sec, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
 }
 
 func importLegacyJSON(store *Store, path string) {

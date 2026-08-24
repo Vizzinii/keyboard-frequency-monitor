@@ -218,6 +218,23 @@
   .chart.slim .col .l { font-size: 9px; }
 
   #err { display: none; color: var(--err); padding: 10px 26px; }
+  #healthBar {
+    max-width: 1180px; margin: 14px auto 0; padding: 9px 16px;
+    border-radius: 10px; font-size: 13px; display: none;
+    background: rgba(255, 180, 100, 0.08);
+    border: 1px solid rgba(255, 180, 100, 0.28);
+    color: var(--text);
+  }
+  #healthBar.bad {
+    background: rgba(255, 107, 107, 0.10);
+    border-color: rgba(255, 107, 107, 0.35);
+    color: var(--err);
+  }
+  #healthBar.paused {
+    background: rgba(150, 170, 160, 0.08);
+    border-color: var(--line);
+    color: var(--dim);
+  }
   footer { color: var(--faint); font-size: 12px; text-align: center; padding: 6px 0 30px; }
 </style>
 </head>
@@ -233,6 +250,7 @@
   <button id="themeBtn" class="theme-btn" title="切换深浅色主题">🌙 月之暗面</button>
   <div id="total">加载中…</div>
 </header>
+<div id="healthBar"></div>
 <div id="err">无法连接本地记录程序 —— 请确认 KeyboardFrequencyMonitor 正在运行。</div>
 
 <main>
@@ -430,6 +448,27 @@ async function load() {
   }
 }
 
+// 健康横幅：异常时提示，避免"计数停了却没人发现"
+async function loadHealth() {
+  try {
+    const h = await (await fetch("/api/health", {cache: "no-store"})).json();
+    const bar = $("healthBar");
+    if (h.status === "degraded") {
+      bar.className = "bad"; bar.style.display = "block";
+      bar.textContent = "⚠ 记录异常：多次自动修复失败，已停止自动重启。请退出程序后重新启动。";
+    } else if (h.status === "paused") {
+      bar.className = "paused"; bar.style.display = "block";
+      bar.textContent = "⏸ 记录已暂停（托盘菜单可恢复）。";
+    } else if (h.status === "healed" ||
+               (h.lastHeal && Date.now() - new Date(h.lastHeal).getTime() < 10 * 60 * 1000)) {
+      bar.className = ""; bar.style.display = "block";
+      bar.textContent = "🔧 " + (h.msg || "最近自动修复过一次，记录已恢复") + "。";
+    } else {
+      bar.style.display = "none";
+    }
+  } catch (e) { /* 面板连不上时由 #err 提示 */ }
+}
+
 document.querySelectorAll(".seg button").forEach(b => {
   b.onclick = () => {
     cur = b.dataset.r;
@@ -438,7 +477,8 @@ document.querySelectorAll(".seg button").forEach(b => {
   };
 });
 load();
-setInterval(load, 2000);
+loadHealth();
+setInterval(() => { load(); loadHealth(); }, 2000);
 </script>
 </body>
 </html>
