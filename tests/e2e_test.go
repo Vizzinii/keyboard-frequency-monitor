@@ -271,7 +271,7 @@ func TestE2E_Export(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(data)
+	text := strings.TrimPrefix(string(data), "\ufeff") // 导出带 UTF-8 BOM，断言前剥掉
 	if !strings.HasPrefix(text, "键名") || !strings.Contains(text, "占比%") {
 		t.Fatalf("CSV 表头异常:\n%s", text)
 	}

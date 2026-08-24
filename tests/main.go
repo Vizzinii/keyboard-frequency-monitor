@@ -306,6 +306,10 @@ func exportCSV(store *Store, path string) error {
 		return err
 	}
 	defer f.Close()
+	// UTF-8 BOM：让中文版 Excel 直接打开导出文件时能正确识别表头
+	if _, err := f.WriteString("\xef\xbb\xbf"); err != nil {
+		return err
+	}
 	w := csv.NewWriter(f)
 	_ = w.Write([]string{"键名", "总次数", "占比%"})
 	for _, kc := range keys {

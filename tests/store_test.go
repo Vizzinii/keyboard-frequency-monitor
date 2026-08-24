@@ -210,3 +210,25 @@ func TestDailyAcrossYear(t *testing.T) {
 		seen[d.Day] = true
 	}
 }
+
+// TestCloseCheckpointsWal Close 后 WAL 应合并回主文件（不存在或 0 字节），
+// 保证"备份 = 复制单个 db 文件"成立。
+func TestCloseCheckpointsWal(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t.db")
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(time.Now().Format(dateLayout), 1, map[string]int{"a": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(path + "-wal")
+	if err == nil && st.Size() > 0 {
+		t.Fatalf("Close 后 -wal 应已 checkpoint（不存在或空文件），实际 size=%d", st.Size())
+	}
+	// -wal 不存在（驱动直接删除）同样符合预期
+}

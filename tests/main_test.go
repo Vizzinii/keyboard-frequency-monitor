@@ -126,7 +126,7 @@ func TestExportCSV(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(b)
+	text := strings.TrimPrefix(string(b), "\ufeff") // 导出带 UTF-8 BOM，断言前剥掉
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	if len(lines) != 3 { // 表头 + 两行
 		t.Fatalf("行数 = %d, want 3:\n%s", len(lines), text)

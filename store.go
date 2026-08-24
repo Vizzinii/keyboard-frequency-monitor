@@ -187,5 +187,8 @@ func (s *Store) FirstDay() (*string, error) {
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// 尽力而为：把 WAL 合并回主文件，兑现"备份 = 复制单个 db 文件"；
+	// 失败不影响关闭（下次启动 SQLite 会自动恢复）。
+	_, _ = s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	return s.db.Close()
 }
