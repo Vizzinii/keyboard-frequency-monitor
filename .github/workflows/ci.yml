@@ -31,12 +31,13 @@ jobs:
       - name: Vet
         run: go vet -unsafeptr=false ./...
 
-      - name: Test
-        run: go test ./...
-
-      # macOS 的 CGEventTap 与菜单栏图标走 cgo，不能关；
-      # 分别编 amd64/arm64 再用 lipo 合成 universal，Intel Mac 也能跑
+      # 单元/端到端测试在本地自包含模块 tests/ 里（根 .gitignore 排除，不入库），
+      # 所以 CI 检出的树里没有测试文件。根目录跑 go test 只会静默通过，
+      # 不如不跑——CI 的把关点是 vet + 双平台编译。测试请在本地
+      # `cd tests && ./sync.sh && go test ./...`。
       - name: Build (macOS universal)
+        # macOS 的 CGEventTap 与菜单栏图标走 cgo，不能关；
+        # 分别编 amd64/arm64 再用 lipo 合成 universal，Intel Mac 也能跑
         if: runner.os == 'macOS'
         run: |
           CGO_ENABLED=1 GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o kfm-amd64 .

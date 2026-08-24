@@ -66,6 +66,9 @@ type Watchdog struct {
 	lastHealAt     time.Time
 	restartAt      time.Time // 上次自动重启时间（0 = 非重启模式），用于冷却
 	manualRequired bool      // 冷却期内仍反复失败 → 永久停用自动重启，等用户手动重启
+
+	// now 是时钟源，测试注入假时钟以便确定性验证 10s/5min 的时间窗；默认 time.Now。
+	now func() time.Time
 }
 
 // NewWatchdog win<=0 时按 60 秒处理；restartAt 为上次自动重启时间（由旧实例通过
@@ -82,9 +85,10 @@ func NewWatchdog(rec *Recorder, health *Health, win time.Duration, restartAt tim
 		escalateWin: 5 * time.Minute,
 		maxHeals:    3,
 		restartAt:   restartAt,
+		now:         time.Now,
 	}
-	if !restartAt.IsZero() && time.Since(restartAt) < w.escalateWin {
-		log.Printf("[看门狗] 距上次自动重启 %s，冷却期内不再自动重启", time.Since(restartAt).Round(time.Second))
+	if !restartAt.IsZero() && w.now().Sub(restartAt) < w.escalateWin {
+		log.Printf("[看门狗] 距上次自动重启 %s，冷却期内不再自动重启", w.now().Sub(restartAt).Round(time.Second))
 	}
 	return w
 }
@@ -106,7 +110,7 @@ func (w *Watchdog) Run(onRestart func()) {
 
 func (w *Watchdog) tick(onRestart func()) {
 	rec := w.rec
-	now := time.Now()
+	now := w.now()
 	lastEvt := rec.LastEvent()
 	lastAct := rec.LastActivity()
 	sysAgo := lastInputAgo()
@@ -155,7 +159,7 @@ func (w *Watchdog) heal(now time.Time, reason string, onRestart func()) {
 
 	if escalate {
 		w.mu.Lock()
-		canRestart := !w.manualRequired && (w.restartAt.IsZero() || time.Since(w.restartAt) >= w.escalateWin)
+		canRestart := !w.manualRequired && (w.restartAt.IsZero() || w.now().Sub(w.restartAt) >= w.escalateWin)
 		if canRestart {
 			w.mu.Unlock()
 			log.Printf("[自愈] %s 内自愈 %d 次仍未稳定，触发自动重启", w.escalateWin, count)

@@ -8,7 +8,9 @@
 - 📦 **单文件、免安装**：一个可执行文件，无运行时依赖，统计面板直接内嵌其中
 - ⌨️🖱️ **全局生效**：切换到其它窗口照常统计，键盘与鼠标按键都算
 - 💾 **崩溃安全**：数据每秒批量写入 SQLite，强杀进程 / 断电最多丢最后一秒，
-  不依赖"正常退出"来保存
+  不依赖"正常退出"来保存；退出时自动合并 WAL，备份就是复制单个 db 文件
+- 🩺 **记录健康看门狗**：钩子静默失效自动重装，反复失败自动重启一次
+  （带冷却防崩溃循环），面板与托盘实时显示记录健康状态
 - 🌗 **双主题面板**：「月之暗面」青瓷暗色 / 「日之光面」琥珀亮色，选择自动记忆
 - 🔒 **隐私优先**：只计数不记录内容；数据仅存本机，面板只监听 127.0.0.1
 - 🪟 **托盘 / 菜单栏控制**：左键点图标开面板，右键可暂停记录、退出
@@ -69,20 +71,40 @@ macOS 要求全局键盘监听必须显式授权，程序会引导你完成两�
 
 ```
 KeyboardFrequencyMonitor [-port 8321] [-reset] [-export f.csv] [-no-tray] [-open-panel=false]
-                         [-watchdog-win 60] [-watchdog-off]
+                         [-watchdog-off] [-watchdog-win N]
 ```
 
 | 参数 | 说明 |
 | --- | --- |
 | `-port N` | 面板端口（默认 8321，被占用自动向后尝试） |
-| `-reset` | 启动前清空所有统计数据 |
-| `-export f.csv` | 导出全部数据为 CSV 后退出 |
+| `-reset` | 启动前清空所有统计数据（已有实例运行时会报错退出） |
+| `-export f.csv` | 导出全部数据为 CSV 后退出（UTF-8 带 BOM，Excel 可直接打开） |
 | `-open-panel=false` | 启动时不自动打开浏览器 |
 | `-no-tray` | 不显示托盘图标（调试用） |
-| `-watchdog-win N` | 看门狗判定窗口（秒，默认 60） |
-| `-watchdog-off` | 关闭看门狗（调试用） |
+| `-watchdog-off` | 关闭钩子看门狗（调试用） |
+| `-watchdog-win N` | 看门狗判定窗口秒数（默认 60） |
+| `-no-hooks` | 不安装全局钩子（内部/e2e 测试用，需配合 `-watchdog-off`） |
+| `-restart` | 内部参数：自动重启时由旧实例拉起，接管原端口 |
 
-重复启动第二个实例不会重复计数，而是直接打开已有实例的面板。
+重复启动第二个实例不会重复计数，而是直接打开已有实例的面板——由内核命名互斥体
+保证，即使两个实例同时启动也只有一个生效。
+
+## 记录健康与自愈
+
+程序内置看门狗，每秒对比"我们的钩子最后一次见到输入"与"系统最后一次输入"：
+钩子长时间收不到任何输入、而系统明明有输入 → 判定钩子失效并自动重装；
+5 分钟内重装 3 次仍未稳定则自动重启一次（带冷却期防止崩溃循环），再失败就停止
+自动重启，等你在托盘菜单手动处理。面板顶部横幅与托盘菜单会实时显示五种状态：
+
+| 状态 | 含义 |
+| --- | --- |
+| 正常 | 一切正常 |
+| 已自愈 | 最近自动修复过一次，记录已恢复 |
+| 已暂停 | 托盘里暂停了记录（已存数据不受影响） |
+| 需重启 | 多次自动修复失败，请退出程序后重新启动 |
+| 看门狗关闭 | 以 `-watchdog-off` 启动，钩子失效不会自动修复 |
+
+托盘右键菜单里的「重新安装钩子」可随时手动触发一次重装。
 
 ## 记录失效的自我修复
 
@@ -136,6 +158,11 @@ go build -trimpath -ldflags "-s -w -H windowsgui" -o KeyboardFrequencyMonitor.ex
 go vet -unsafeptr=false ./...   # unsafeptr 对 Win32 钩子回调误报，故豁免
 ```
 
+全部单元与端到端测试位于本地自包含模块 `tests/`（**仅本地保留，不入库**）：
+`cd tests && ./sync.sh && go test ./...`。
+
+网络受限（proxy.golang.org 不可达）时先设置模块镜像：`export GOPROXY=https://goproxy.cn,direct`。
+
 推送 `v*` 标签后，GitHub Actions 会同时构建 Windows 与 macOS 版本并发布（见 `.github/workflows/ci.yml`）。
 
 ## 项目结构
@@ -143,10 +170,11 @@ go vet -unsafeptr=false ./...   # unsafeptr 对 Win32 钩子回调误报，故�
 平台相关代码用 Go 的文件名后缀约定（`_windows.go` / `_darwin.go`）区分，无需手写构建标签。
 
 ```
-├── main.go                 入口与命令行参数（跨平台）
-├── recorder.go             事件缓冲与暂停开关（跨平台）
-├── recorder_windows.go     Win32 低级键鼠钩子
+├── main.go                 入口、命令行参数、单实例仲裁与自动重启（跨平台）
+├── recorder.go             事件缓冲、暂停开关与落盘重试（跨平台）
+├── recorder_windows.go     Win32 低级键鼠钩子（安装代际化自愈）
 ├── recorder_darwin.go      CGEventTap + 输入监控权限检查
+├── singleinstance.go       内核命名互斥体，保证单实例（Windows）
 ├── keymap_windows.go       Windows 虚拟键码 -> 键名
 ├── keymap_darwin.go        macOS 键码 -> 键名（+ 修饰键按下/松开去重）
 ├── store.go                SQLite 存储（每秒批量事务写入）
@@ -164,7 +192,8 @@ go vet -unsafeptr=false ./...   # unsafeptr 对 Win32 钩子回调误报，故�
 ├── browser_windows.go      打开默认浏览器（rundll32）
 ├── browser_darwin.go       打开默认浏览器（open）
 ├── dashboard.html          网页面板（编译期内嵌）
-└── assets/                 托盘图标（tools/genicon 可重新生成两种格式）
+├── assets/                 托盘图标（tools/genicon 可重新生成两种格式）
+└── tests/                  自包含测试模块：单元 + 黑盒端到端（仅本地保留，不入库）
 ```
 
 两个平台的 `vkLabel` **必须输出相同的键名词表**，否则面板热力图认不出键位。

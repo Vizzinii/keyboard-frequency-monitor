@@ -9,6 +9,10 @@ keyboard_stats.db*
 
 # 看门狗运行日志
 monitor.log
+monitor.log.1
+
+# 单实例锁（macOS/Linux 的 flock 锁文件）
+.kfm.lock
 
 # 测试/调试残留
 kfm.pid
@@ -17,6 +21,9 @@ kfm.log
 
 # macOS
 .DS_Store
+
+# 自包含测试模块（仅本地保留，不入库）
+tests/
 
 # ZCode 会话产物
 .zcode/

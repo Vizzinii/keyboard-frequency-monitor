@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -8,7 +9,7 @@ import (
 // eventBuffer 溢出直接丢弃，绝不能拖慢系统输入。
 const eventBuffer = 16384
 
-// Recorder 是跨平台的事件缓冲：平台相关的钩子只负责调用 emit，
+// Recorder 是跨平台的事件缓冲：平台相关的钩子只负责调用 emit/touch，
 // 具体安装/卸载见 recorder_windows.go / recorder_darwin.go 的 StartHooks。
 type Recorder struct {
 	ch     chan string
@@ -17,6 +18,11 @@ type Recorder struct {
 	// （由回调直接写，不加锁）。两者都给看门狗判定用。
 	lastEvent    atomic.Int64
 	lastActivity atomic.Int64
+
+	drainMu sync.Mutex // 串行化 Drain，防止退出收尾与 flushLoop 并发争抢事件
+
+	pendingMu sync.Mutex
+	pending   map[string]int // 落盘失败暂存的事件，下轮重试
 }
 
 func NewRecorder() *Recorder {
@@ -61,7 +67,11 @@ func (r *Recorder) emit(label string) {
 }
 
 // Drain 取走缓冲里的全部事件并聚合成 键名->次数。
+// 串行化保证：退出收尾（selfRestart / 托盘退出）与每秒 flushLoop 并发调用时，
+// 不会出现一方取走事件、另一方永久阻塞等待或重复计数的竞态。
 func (r *Recorder) Drain() map[string]int {
+	r.drainMu.Lock()
+	defer r.drainMu.Unlock()
 	n := len(r.ch)
 	out := make(map[string]int, min(n, 128))
 	for range n {
@@ -71,4 +81,42 @@ func (r *Recorder) Drain() map[string]int {
 		r.lastEvent.Store(time.Now().Unix())
 	}
 	return out
+}
+
+// HasPending 报告是否有落盘失败暂存的事件。
+func (r *Recorder) HasPending() bool {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	return len(r.pending) > 0
+}
+
+// mergePending 把暂存事件并入本次待写批次并清空暂存。
+func (r *Recorder) mergePending(labels map[string]int) map[string]int {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	if len(r.pending) == 0 {
+		return labels
+	}
+	if labels == nil {
+		labels = make(map[string]int, len(r.pending))
+	}
+	for k, v := range r.pending {
+		labels[k] += v
+	}
+	r.pending = nil
+	return labels
+}
+
+// retainPending 落盘失败时暂存整批事件，下一轮 flushOnce 重试。
+// 按键名归并，长时间故障下暂存量也有界。
+func (r *Recorder) retainPending(labels map[string]int) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	if r.pending == nil {
+		r.pending = labels
+		return
+	}
+	for k, v := range labels {
+		r.pending[k] += v
+	}
 }

@@ -34,17 +34,33 @@ var (
 	getCurrentTID = kernel32.NewProc("GetCurrentThreadId")
 )
 
-// hookState 是钩子的一代生命周期。看门狗要能重装，所以它挂在 Recorder 上
-// 而不是 Hooks 里——Hooks 只是给 main 的 defer 用的把手。
+// hookState 是钩子的一代生命周期。看门狗要能重装，所以它是包级状态
+// 而不是 Hooks 的字段——Hooks 只是给 main 的 defer 用的把手。
 type hookState struct {
 	mu         sync.Mutex
 	keyboard   windows.Handle
 	mouse      windows.Handle
 	threadID   uintptr
 	threadDone chan struct{} // 消息泵线程退出时关闭
+
+	// abortGen 是安装代际号：每次 install 递增；超时或被并发重装取代时也递增，
+	// 迟到的安装线程凭它判断自己是否已作废——作废则当场卸钩退出，绝不发布句柄，
+	// 杜绝"新旧两代钩子并存 → 每个按键被计多次"。
+	abortGen uint64
+
+	// 测试注入：钩子安装/卸载的底层调用，默认走真实 syscall；
+	// 单测用假实现模拟"SetWindowsHookEx 卡住后迟到返回"，验证代际作废路径。
+	setHookFn func(hookType int, cb uintptr) (uintptr, error)
+	unhookFn  func(handle uintptr)
 }
 
-var hooks hookState
+var hooks = hookState{
+	setHookFn: func(hookType int, cb uintptr) (uintptr, error) {
+		h, _, e := setHook.Call(uintptr(hookType), cb, 0, 0)
+		return h, e
+	},
+	unhookFn: func(h uintptr) { unhook.Call(h) },
+}
 
 type Hooks struct{ r *Recorder }
 
@@ -75,14 +91,27 @@ func (r *Recorder) Alive() bool {
 }
 
 // install 安装钩子并启动消息泵线程；可重复调用。
-// 细节：先停掉上一代钩子（卸钩 + WM_QUIT），再起新线程；
-// 旧线程退出时只关闭它自己那一代的 threadDone，绝不触碰新线程的字段。
+// 细节：先停掉上一代钩子（卸钩 + WM_QUIT），等上一代线程真正退出后再起新线程；
+// 通过 abortGen 代际号保证：超时或并发重装时，迟到的安装完成会被作废并自卸钩，
+// 绝不与新一代钩子并存（并存会让每个按键被计多次）。
 func (r *Recorder) install() error {
 	hooks.mu.Lock()
 	stopLocked()
+	hooks.abortGen++ // 作废上一代可能迟到的安装完成
+	gen := hooks.abortGen
+	prevDone := hooks.threadDone
 	done := make(chan struct{})
 	hooks.threadDone = done
 	hooks.mu.Unlock()
+
+	if prevDone != nil {
+		// 等上一代消息泵线程真正退出再装新钩子：旧线程队列里残留的钩子消息
+		// 不会再派发到旧回调，避免新旧两代短暂并存重复计数。限时以防卡死。
+		select {
+		case <-prevDone:
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -92,27 +121,43 @@ func (r *Recorder) install() error {
 		tid, _, _ := getCurrentTID.Call()
 
 		kbCb := syscall.NewCallback(r.kbdProc)
-		kh, _, kerr := setHook.Call(whKeyboardLL, kbCb, 0, 0)
+		kh, kerr := hooks.setHookFn(whKeyboardLL, kbCb)
 		if kh == 0 {
 			errCh <- fmt.Errorf("SetWindowsHookEx(键盘): %v", kerr)
 			return
 		}
 		msCb := syscall.NewCallback(r.mouseProc)
-		mh, _, merr := setHook.Call(whMouseLL, msCb, 0, 0)
+		mh, merr := hooks.setHookFn(whMouseLL, msCb)
 		if mh == 0 {
-			unhook.Call(kh) // 键盘钩子已装上但整体失败，卸掉
+			hooks.unhookFn(kh) // 键盘钩子已装上但整体失败，卸掉
 			errCh <- fmt.Errorf("SetWindowsHookEx(鼠标): %v", merr)
 			return
 		}
 
 		hooks.mu.Lock()
-		hooks.threadID = tid
-		hooks.keyboard = windows.Handle(kh)
-		hooks.mouse = windows.Handle(mh)
+		keep := gen == hooks.abortGen // 未被超时/并发重装作废才发布句柄
+		if keep {
+			hooks.threadID = tid
+			hooks.keyboard = windows.Handle(kh)
+			hooks.mouse = windows.Handle(mh)
+		}
 		hooks.mu.Unlock()
+		if !keep { // 迟到的完成：卸掉自己的钩子，不留孤儿代
+			hooks.unhookFn(kh)
+			hooks.unhookFn(mh)
+			errCh <- fmt.Errorf("安装已被更新的请求取代")
+			return
+		}
 		r.touch()
 
 		errCh <- nil
+
+		hooks.mu.Lock()
+		alive := gen == hooks.abortGen // 若超时已作废本代，则不再进消息泵
+		hooks.mu.Unlock()
+		if !alive {
+			return
+		}
 
 		var m winMsg
 		for {
@@ -129,6 +174,12 @@ func (r *Recorder) install() error {
 			return err
 		}
 	case <-time.After(3 * time.Second):
+		// 超时：作废这代安装并清掉已发布的部分句柄；迟到的 goroutine
+		// 恢复后会自查代际号、自卸钩退出，不会留下孤儿钩子。
+		hooks.mu.Lock()
+		hooks.abortGen++
+		stopLocked()
+		hooks.mu.Unlock()
 		return fmt.Errorf("安装钩子超时")
 	}
 	return nil
@@ -138,11 +189,11 @@ func (r *Recorder) install() error {
 // 先卸钩再发 WM_QUIT，保证新旧两代钩子不会短暂并存重复计数。
 func stopLocked() {
 	if hooks.keyboard != 0 {
-		unhook.Call(uintptr(hooks.keyboard))
+		hooks.unhookFn(uintptr(hooks.keyboard))
 		hooks.keyboard = 0
 	}
 	if hooks.mouse != 0 {
-		unhook.Call(uintptr(hooks.mouse))
+		hooks.unhookFn(uintptr(hooks.mouse))
 		hooks.mouse = 0
 	}
 	if hooks.threadID != 0 {
