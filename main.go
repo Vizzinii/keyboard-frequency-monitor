@@ -86,7 +86,7 @@ func main() {
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
 	} else {
-		runTray(panelURL, rec, exePath)
+		runTray(panelURL, rec)
 	}
 
 	flushOnce(store, rec) // 收尾：把最后不足一秒的也写进去

@@ -133,7 +133,7 @@
     font-size: 12px; color: var(--dim); margin: 0 0 14px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 1.2px;
   }
-  .two-col { display: grid; grid-template-columns: 11fr 9fr; gap: 16px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 920px) { .two-col { grid-template-columns: 1fr; } }
 
   /* ---- 摘要统计 ---- */
@@ -198,10 +198,10 @@
 
   /* ---- 趋势 / 时段 ---- */
   .chart {
-    display: flex; align-items: flex-end; gap: 7px; height: 130px;
+    display: flex; align-items: flex-end; gap: 7px; height: 250px;
     border-bottom: 1px solid var(--line); padding-bottom: 1px;
   }
-  .chart.slim { height: 96px; gap: 4px; }
+  .chart.slim { height: 250px; gap: 4px; }
   .col { flex: 1 1 0; display: flex; flex-direction: column; justify-content: flex-end;
          align-items: center; gap: 4px; height: 100%; min-width: 0; }
   .col .v {
@@ -215,6 +215,7 @@
   .col.wknd .v { background: var(--wknd-v); box-shadow: none; }
   .col.zero .v { background: var(--zero-v); box-shadow: none; }
   .col .l { font-size: 10px; color: var(--faint); white-space: nowrap; line-height: 1.2; }
+  .chart.slim .col .l { font-size: 9px; }
 
   #err { display: none; color: var(--err); padding: 10px 26px; }
   footer { color: var(--faint); font-size: 12px; text-align: center; padding: 6px 0 30px; }
@@ -243,15 +244,18 @@
     <div id="rest"></div>
   </section>
 
+  <section class="card">
+    <h2>使用排行 · Top 15</h2>
+    <div id="rank"></div>
+  </section>
+
   <div class="two-col">
-    <section class="card">
-      <h2>使用排行 · Top 15</h2>
-      <div id="rank"></div>
-    </section>
     <section class="card">
       <h2>每日趋势 · 近 14 天</h2>
       <div class="chart" id="days"></div>
-      <h2 style="margin-top:20px">时段分布 · 按小时</h2>
+    </section>
+    <section class="card">
+      <h2>时段分布 · 按小时</h2>
       <div class="chart slim" id="hours"></div>
     </section>
   </div>
@@ -402,12 +406,12 @@ function render(d) {
        <span class="l">${day.slice(5)}</span></div>`;
   }).join("");
 
-  // ---- 时段分布（零值小时不画柱，避免标签行里出现杂乱的小短条） ----
+  // ---- 时段分布（每小时都标数字，柱子与标签一一对应；零值不画柱） ----
   const hmax = Math.max(...d.hours, 1);
   $("hours").innerHTML = d.hours.map((c,h) =>
     `<div class="col${c?"":" zero"}" title="${h} 点～${h+1} 点：${fmt(c)} 次">
        ${c ? `<div class="v" style="--h:${Math.max(c/hmax*100, 4)}%"></div>` : ""}
-       <span class="l">${h%3===0 ? h : ""}</span></div>`).join("");
+       <span class="l">${h}</span></div>`).join("");
 
   // ---- 顶部合计 ----
   const since = d.since ? ` · 记录自 ${d.since}` : "";
