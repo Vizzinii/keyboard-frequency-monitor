@@ -14,7 +14,10 @@ const (
 	maskLAlt   = 0x00000020
 	maskRAlt   = 0x00000040
 	maskRCtrl  = 0x00002000
-	maskCaps   = 0x00010000 // NX_ALPHASHIFTMASK：caps 是开关态，不分左右
+	// Caps Lock 必须用 STATELESS（物理按下）位，不能用 NX_ALPHASHIFTMASK：
+	// 后者是 LED 锁定态，开灯后按键松开时仍为 1（一次按下计两次），
+	// 而关灯的那次按下它是 0（漏计）。STATELESS 位与其它修饰键语义一致。
+	maskCaps = 0x00000080 // NX_DEVICE_ALPHASHIFT_STATELESS_MASK
 )
 
 // modifierPressed 判断这次 flagsChanged 是“按下”而非“松开”。

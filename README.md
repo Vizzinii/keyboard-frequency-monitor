@@ -69,6 +69,7 @@ macOS 要求全局键盘监听必须显式授权，程序会引导你完成两�
 
 ```
 KeyboardFrequencyMonitor [-port 8321] [-reset] [-export f.csv] [-no-tray] [-open-panel=false]
+                         [-watchdog-win 60] [-watchdog-off]
 ```
 
 | 参数 | 说明 |
@@ -78,8 +79,33 @@ KeyboardFrequencyMonitor [-port 8321] [-reset] [-export f.csv] [-no-tray] [-open
 | `-export f.csv` | 导出全部数据为 CSV 后退出 |
 | `-open-panel=false` | 启动时不自动打开浏览器 |
 | `-no-tray` | 不显示托盘图标（调试用） |
+| `-watchdog-win N` | 看门狗判定窗口（秒，默认 60） |
+| `-watchdog-off` | 关闭看门狗（调试用） |
 
 重复启动第二个实例不会重复计数，而是直接打开已有实例的面板。
+
+## 记录失效的自我修复
+
+全局输入钩子有一种讨厌的失效方式：**进程活着、面板能开，但按键再也进不来**。
+Windows 上是钩子线程的消息泵退出或钩子被系统移除，macOS 上是 CGEventTap 被系统
+禁用或 run loop 退出。两种情况系统都不报错，旧版会无限期安静空转。
+
+现在有三层应对：
+
+1. **存活看门狗** —— 每秒检查钩子线程/run loop 是否还在、tap 是否仍被系统启用，
+   失效即自动重装
+2. **事件流看门狗** —— 用系统级 API（Windows `GetLastInputInfo`、
+   macOS `CGEventSourceSecondsSinceLastEventType`，都不经过我们的钩子）对比：
+   判定窗口内我方零事件但系统持续有输入 → 判定失效并重装。
+   用户真空闲时两边都静默，不会误报
+3. **自动重启兜底** —— 5 分钟内重装 3 次仍不稳定则自我重启（新实例接管原端口，
+   新旧钩子不重叠）；重启后 5 分钟冷却期内不再自动重启，转为提示手动重启
+
+状态可见性：面板顶部异常时出现横幅，托盘菜单首项显示"记录：正常/异常"，
+`/api/health` 返回完整状态（钩子存活、最后事件时间、自愈次数等），
+自愈与重启事件写入可执行文件同目录的 `monitor.log`。
+
+托盘菜单里的 **重新安装钩子** 可手动触发一次重装（正常时点了也无副作用）。
 
 ## 已知限制
 
@@ -125,8 +151,14 @@ go vet -unsafeptr=false ./...   # unsafeptr 对 Win32 钩子回调误报，故�
 ├── keymap_darwin.go        macOS 键码 -> 键名（+ 修饰键按下/松开去重）
 ├── store.go                SQLite 存储（每秒批量事务写入）
 ├── stats.go                统计聚合与 API 载荷
-├── server.go               内嵌面板的本地 HTTP 服务
-├── tray.go                 托盘/菜单栏菜单（跨平台）
+├── server.go               内嵌面板的本地 HTTP 服务（含 /api/health）
+├── watchdog.go             看门狗与健康状态（跨平台主体）
+├── watchdog_logic.go       失效判定纯函数（可单测）
+├── watchdog_windows.go     GetLastInputInfo
+├── watchdog_darwin.go      CGEventSourceSecondsSinceLastEventType
+├── restart_windows.go      自动重启的进程分离参数
+├── restart_darwin.go       同上（Setsid）
+├── tray.go                 托盘/菜单栏菜单（跨平台，含状态项）
 ├── icon_windows.go         内嵌 ICO 图标
 ├── icon_darwin.go          内嵌 PNG 图标（NSImage 不吃 ICO）
 ├── browser_windows.go      打开默认浏览器（rundll32）

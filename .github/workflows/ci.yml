@@ -17,14 +17,8 @@ jobs:
         include:
           - os: windows-latest
             name: KeyboardFrequencyMonitor.exe
-            # -H windowsgui 隐藏控制台窗口，仅 Windows 需要
-            ldflags: -s -w -H windowsgui
-            cgo: 0
           - os: macos-latest
             name: KeyboardFrequencyMonitor-macos
-            # macOS 的 CGEventTap 与菜单栏图标都走 cgo，不能关
-            ldflags: -s -w
-            cgo: 1
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -37,10 +31,23 @@ jobs:
       - name: Vet
         run: go vet -unsafeptr=false ./...
 
-      - name: Build
-        env:
-          CGO_ENABLED: ${{ matrix.cgo }}
-        run: go build -trimpath -ldflags "${{ matrix.ldflags }}" -o ${{ matrix.name }} .
+      - name: Test
+        run: go test ./...
+
+      # macOS 的 CGEventTap 与菜单栏图标走 cgo，不能关；
+      # 分别编 amd64/arm64 再用 lipo 合成 universal，Intel Mac 也能跑
+      - name: Build (macOS universal)
+        if: runner.os == 'macOS'
+        run: |
+          CGO_ENABLED=1 GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o kfm-amd64 .
+          CGO_ENABLED=1 GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o kfm-arm64 .
+          lipo -create -output "${{ matrix.name }}" kfm-amd64 kfm-arm64
+          lipo -archs "${{ matrix.name }}"
+
+      # -H windowsgui 隐藏控制台窗口，仅 Windows 需要
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: go build -trimpath -ldflags "-s -w -H windowsgui" -o ${{ matrix.name }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -218,6 +218,13 @@
   .chart.slim .col .l { font-size: 9px; }
 
   #err { display: none; color: var(--err); padding: 10px 26px; }
+  /* 记录状态横幅：正常时不占位，异常/自愈过才显示 */
+  #hbanner {
+    display: none; margin: 12px 26px 0; padding: 9px 14px;
+    border-radius: 10px; font-size: 13px;
+    border: 1px solid var(--line); background: var(--track);
+  }
+  #hbanner.bad { color: var(--err); border-color: var(--err); }
   footer { color: var(--faint); font-size: 12px; text-align: center; padding: 6px 0 30px; }
 </style>
 </head>
@@ -234,6 +241,7 @@
   <div id="total">加载中…</div>
 </header>
 <div id="err">无法连接本地记录程序 —— 请确认 KeyboardFrequencyMonitor 正在运行。</div>
+<div id="hbanner"></div>
 
 <main>
   <div class="tiles" id="tiles"></div>
@@ -271,6 +279,7 @@ const fmt = n => n.toLocaleString("en-US");
 
 // 物理键盘布局：[键帽文字, 对应的统计键名数组, 宽度单位]
 const K = (t,n,u=1)=>[t,[n],u];
+// 前 5 行两平台通用；底排修饰键的物理顺序不同，见 BOTTOM_WIN / BOTTOM_MAC。
 const LAYOUT = [
   [K("Esc","esc"), ...["f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12"]
       .map(n=>K(n.toUpperCase(),n))],
@@ -285,8 +294,15 @@ const LAYOUT = [
   [K("Shift","shift",2.25),
    ...["z","x","c","v","b","n","m",",",".","/"].map(n=>K(n.toUpperCase(),n)),
    K("Shift","shift_r",2.75)],
-  [K("Ctrl","ctrl",1.25),K("Win","cmd",1.25),K("Alt","alt",1.25),K("Space","space",6.25),
-   K("Alt","alt_r",1.25),K("Win","cmd_r",1.25),K("☰","menu",1.25),K("Ctrl","ctrl_r",1.25)],
+];
+const BOTTOM_WIN = [
+  K("Ctrl","ctrl",1.25),K("Win","cmd",1.25),K("Alt","alt",1.25),K("Space","space",6.25),
+  K("Alt","alt_r",1.25),K("Win","cmd_r",1.25),K("☰","menu",1.25),K("Ctrl","ctrl_r",1.25),
+];
+// Mac 底排真实顺序：⌃ ⌥ ⌘ space ⌘ ⌥（无 Win/菜单键；fn 不统计所以不画）
+const BOTTOM_MAC = [
+  K("⌃","ctrl",1.4),K("⌥","alt",1.4),K("⌘","cmd",1.7),K("Space","space",6.4),
+  K("⌘","cmd_r",1.7),K("⌥","alt_r",1.4),K("⌃","ctrl_r",1.4),
 ];
 
 let cur = "week";
@@ -326,12 +342,6 @@ function heatColor(ratio) {
            fg: l > 36 ? "#0e2019" : "#eef4f0" };
 }
 
-// mac 的修饰键键帽与 Windows 不同（且底排物理顺序是 ctrl/alt/cmd）。
-// 只换文字，布局不动。
-const MAC_CAPS = {ctrl:"⌃", ctrl_r:"⌃", cmd:"⌘", cmd_r:"⌘",
-                  alt:"⌥", alt_r:"⌥", backspace:"⌫", menu:"fn"};
-const capFor = (cap, name, isMac) => (isMac && MAC_CAPS[name]) || cap;
-
 function render(d) {
   lastData = d;
   const map = Object.fromEntries(d.keys);
@@ -363,10 +373,9 @@ function render(d) {
   const isMac = d.os === "darwin";
   const shown = new Set();
   let html = "";
-  for (const row of LAYOUT) {
+  for (const row of [...LAYOUT, isMac ? BOTTOM_MAC : BOTTOM_WIN]) {
     html += '<div class="krow">';
-    for (const [cap0, names, u] of row) {
-      const cap = capFor(cap0, names[0], isMac);
+    for (const [cap, names, u] of row) {
       const c = names.reduce((s,n)=> s + (map[n]||0), 0);
       names.forEach(n=>shown.add(n));
       if (c > 0 && max > 0) {
@@ -428,6 +437,24 @@ function render(d) {
     `（${fmt(d.distinct)} 种）${since} · 更新于 ${d.now}`;
 }
 
+// 记录状态横幅：只在需要用户知情时出现（异常、暂停、刚自愈过），正常时隐藏。
+async function loadHealth() {
+  const el = $("hbanner");
+  try {
+    const h = await (await fetch("/api/health", {cache: "no-store"})).json();
+    const text = {
+      degraded: "🔴 记录异常：自动修复多次未成功，请手动重启程序",
+      paused:   "⚪ 记录已暂停 —— 托盘菜单可恢复",
+      healed:   "🟢 " + (h.msg || "刚刚自动修复过一次，记录已恢复"),
+    }[h.status];
+    el.style.display = text ? "block" : "none";
+    el.className = h.status === "degraded" ? "bad" : "";
+    if (text) el.textContent = text;
+  } catch (e) {
+    el.style.display = "none"; // 连不上时由 #err 提示，不重复报
+  }
+}
+
 async function load() {
   try {
     const r = await fetch("/api/stats?range=" + cur, {cache: "no-store"});
@@ -436,6 +463,7 @@ async function load() {
   } catch (e) {
     $("err").style.display = "block";
   }
+  loadHealth();
 }
 
 document.querySelectorAll(".seg button").forEach(b => {
