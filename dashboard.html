@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>键盘使用统计</title>
+<style>
+  /* ---- 月之暗面（青瓷）---- */
+  :root {
+    --bg: #0b100e;
+    --glow1: rgba(127, 196, 171, 0.06);
+    --glow2: rgba(150, 170, 160, 0.05);
+    --header-bg: rgba(11, 16, 14, 0.78);
+    --card: #131a17;
+    --card2: #161f1b;
+    --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    --line: rgba(220, 255, 240, 0.07);
+    --text: #e3eae5;
+    --dim: #94a49b;
+    --faint: #64736c;
+    --track: rgba(220, 255, 240, 0.05);
+    --accent: #7fc4ab;
+    --hero-text: linear-gradient(90deg, #a5d8c4, #6cbfa4);
+    --logo: linear-gradient(135deg, #c8d6cd, #7fc4ab);
+    --logo-shadow: 0 4px 14px rgba(127, 196, 171, 0.28);
+    --seg-on-bg: linear-gradient(180deg, rgba(127, 196, 171, 0.24), rgba(127, 196, 171, 0.12));
+    --seg-on-ring: rgba(127, 196, 171, 0.42);
+    --bar: linear-gradient(90deg, #8ba89c, #7fd4bc);
+    --bar-glow: rgba(127, 212, 188, 0.20);
+    --chart-v: linear-gradient(180deg, #7fd0b4, #37796a 85%);
+    --chart-glow: rgba(127, 208, 180, 0.14);
+    --wknd-v: linear-gradient(180deg, #37423d, #28312d);
+    --zero-v: rgba(220, 255, 240, 0.06);
+    --key-bg: #151d19;
+    --key-border: rgba(220, 255, 240, 0.05);
+    --key-inset: rgba(255, 255, 255, 0.05);
+    --key-lit-border: rgba(220, 255, 240, 0.14);
+    --err: #ffb1a8;
+  }
+  /* ---- 日之光面 ---- */
+  html[data-theme="light"] {
+    --bg: #f6f2e8;
+    --glow1: rgba(234, 140, 31, 0.10);
+    --glow2: rgba(255, 255, 255, 0.65);
+    --header-bg: rgba(246, 242, 232, 0.82);
+    --card: #fffdf8;
+    --card2: #fffef9;
+    --card-shadow: 0 6px 18px rgba(140, 100, 40, 0.10);
+    --line: rgba(90, 66, 24, 0.13);
+    --text: #33291a;
+    --dim: #7d7362;
+    --faint: #a89e8c;
+    --track: rgba(90, 66, 24, 0.08);
+    --accent: #d97b06;
+    --hero-text: linear-gradient(90deg, #e8920c, #c2410c);
+    --logo: linear-gradient(135deg, #f0b23e, #d95f06);
+    --logo-shadow: 0 4px 14px rgba(217, 123, 6, 0.25);
+    --seg-on-bg: linear-gradient(180deg, rgba(217, 123, 6, 0.20), rgba(217, 123, 6, 0.09));
+    --seg-on-ring: rgba(217, 123, 6, 0.45);
+    --bar: linear-gradient(90deg, #e0a33e, #c2410c);
+    --bar-glow: rgba(217, 123, 6, 0.18);
+    --chart-v: linear-gradient(180deg, #f2a83b, #d9620a 85%);
+    --chart-glow: rgba(217, 123, 6, 0.14);
+    --wknd-v: linear-gradient(180deg, #c9c2b2, #b0a893);
+    --zero-v: rgba(90, 66, 24, 0.08);
+    --key-bg: #efe9da;
+    --key-border: rgba(90, 66, 24, 0.14);
+    --key-inset: rgba(255, 255, 255, 0.75);
+    --key-lit-border: rgba(90, 66, 24, 0.28);
+    --err: #c0392b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 500px at 75% -180px, var(--glow1), transparent 60%),
+      radial-gradient(900px 420px at 15% -160px, var(--glow2), transparent 55%),
+      var(--bg);
+    background-attachment: fixed;
+    color: var(--text);
+    font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    min-height: 100vh;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    padding: 13px 26px;
+    background: var(--header-bg);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .logo {
+    width: 30px; height: 30px; border-radius: 8px; flex: none;
+    background: var(--logo);
+    box-shadow: var(--logo-shadow);
+    display: grid; place-items: center; font-size: 15px;
+  }
+  header h1 { font-size: 16px; margin: 0 auto 0 0; font-weight: 650; letter-spacing: .2px; }
+  #total { color: var(--dim); font-size: 12.5px; }
+  #total b { color: var(--text); font-size: 14px; font-weight: 650; }
+
+  .seg {
+    display: flex; gap: 2px; padding: 3px;
+    background: var(--track);
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  .seg button, .theme-btn {
+    background: none; border: 0; color: var(--dim);
+    padding: 5px 15px; border-radius: 8px; cursor: pointer;
+    font-size: 13px; font-family: inherit; transition: all .15s;
+  }
+  .seg button:hover, .theme-btn:hover { color: var(--text); }
+  .seg button.on {
+    color: var(--text);
+    background: var(--seg-on-bg);
+    box-shadow: inset 0 0 0 1px var(--seg-on-ring);
+  }
+  .theme-btn {
+    border: 1px solid var(--line);
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 13px;
+  }
+  .theme-btn:hover { border-color: var(--seg-on-ring); }
+
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 26px 30px; }
+  .card, .tile {
+    background: linear-gradient(180deg, var(--card2), var(--card));
+    border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--card-shadow);
+  }
+  .card { padding: 16px 20px 18px; margin-bottom: 16px; }
+  .card h2 {
+    font-size: 12px; color: var(--dim); margin: 0 0 14px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1.2px;
+  }
+  .two-col { display: grid; grid-template-columns: 11fr 9fr; gap: 16px; }
+  @media (max-width: 920px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* ---- 摘要统计 ---- */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 920px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+  .tile { padding: 13px 18px 12px; }
+  .tile .k { font-size: 12px; color: var(--dim); margin-bottom: 3px; }
+  .tile .v { font-size: 21px; font-weight: 650; letter-spacing: .2px; }
+  .tile .v small { font-size: 12.5px; color: var(--dim); font-weight: 500; margin-left: 5px; }
+  .tile.hero .v {
+    background: var(--hero-text);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+
+  /* ---- 键盘热力图 ---- */
+  #kb { display: flex; flex-direction: column; gap: 6px; }
+  .krow { display: flex; gap: 6px; }
+  .key {
+    flex: var(--u) var(--u) 0; min-width: 0; height: 50px;
+    border-radius: 9px; border: 1px solid var(--key-border);
+    background: linear-gradient(180deg, var(--key-inset), rgba(0,0,0,0) 42%), var(--key-bg);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.18);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    overflow: hidden; user-select: none; transition: transform .1s;
+  }
+  .key:hover { transform: translateY(-1px); }
+  .key .cap {
+    font-size: 11.5px; color: var(--faint); white-space: nowrap;
+    max-width: 94%; overflow: hidden; text-overflow: ellipsis; line-height: 1.25;
+  }
+  .key .n { font-size: 10.5px; line-height: 1.2; }
+  .key.lit { border-color: var(--key-lit-border); }
+
+  #rest { margin-top: 12px; color: var(--faint); font-size: 12px; }
+
+  /* ---- 排行 ---- */
+  .rankrow {
+    display: grid; grid-template-columns: 24px 96px 1fr 74px 46px;
+    align-items: center; gap: 10px; padding: 3.5px 0; font-size: 13px;
+  }
+  .pos {
+    width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center;
+    font-size: 11px; font-weight: 650; color: var(--faint);
+    background: var(--track);
+  }
+  .pos.g1 { background: linear-gradient(135deg, #fbbf24, #f59e0b); color: #201503; }
+  .pos.g2 { background: linear-gradient(135deg, #cbd5e1, #94a3b8); color: #1c2430; }
+  .pos.g3 { background: linear-gradient(135deg, #d6a06a, #b87333); color: #241304; }
+  .rankrow .name {
+    text-align: right; color: var(--text); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .rankrow .track { height: 14px; border-radius: 7px; background: var(--track); overflow: hidden; }
+  .rankrow .bar {
+    height: 100%; border-radius: 7px; min-width: 3px;
+    background: var(--bar);
+    box-shadow: 0 0 10px var(--bar-glow);
+    transition: width .5s ease;
+  }
+  .rankrow .cnt { text-align: right; color: var(--dim); }
+  .rankrow .pct { text-align: right; color: var(--faint); font-size: 12px; }
+
+  /* ---- 趋势 / 时段 ---- */
+  .chart {
+    display: flex; align-items: flex-end; gap: 7px; height: 130px;
+    border-bottom: 1px solid var(--line); padding-bottom: 1px;
+  }
+  .chart.slim { height: 96px; gap: 4px; }
+  .col { flex: 1 1 0; display: flex; flex-direction: column; justify-content: flex-end;
+         align-items: center; gap: 5px; height: 100%; min-width: 0; }
+  .col .v {
+    height: var(--h); width: 100%; max-width: 36px;
+    border-radius: 5px 5px 2px 2px;
+    background: var(--chart-v);
+    box-shadow: 0 0 12px var(--chart-glow);
+    transition: height .5s ease;
+  }
+  .col.wknd .v { background: var(--wknd-v); box-shadow: none; }
+  .col.zero .v { background: var(--zero-v); box-shadow: none; }
+  .col .l { font-size: 10px; color: var(--faint); white-space: nowrap; }
+
+  #err { display: none; color: var(--err); padding: 10px 26px; }
+  footer { color: var(--faint); font-size: 12px; text-align: center; padding: 6px 0 30px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">⌨</div>
+  <h1>键盘使用统计</h1>
+  <div class="seg">
+    <button data-r="today">今天</button>
+    <button data-r="week" class="on">近 7 天</button>
+    <button data-r="all">全部</button>
+  </div>
+  <button id="themeBtn" class="theme-btn" title="切换深浅色主题">🌙 月之暗面</button>
+  <div id="total">加载中…</div>
+</header>
+<div id="err">无法连接本地记录程序 —— 请确认 KeyboardFrequencyMonitor 正在运行。</div>
+
+<main>
+  <div class="tiles" id="tiles"></div>
+
+  <section class="card">
+    <h2>键位热力图 · 色块越亮按得越多</h2>
+    <div id="kb"></div>
+    <div id="rest"></div>
+  </section>
+
+  <div class="two-col">
+    <section class="card">
+      <h2>使用排行 · Top 15</h2>
+      <div id="rank"></div>
+    </section>
+    <section class="card">
+      <h2>每日趋势 · 近 14 天</h2>
+      <div class="chart" id="days"></div>
+      <h2 style="margin-top:20px">时段分布 · 按小时</h2>
+      <div class="chart slim" id="hours"></div>
+    </section>
+  </div>
+</main>
+<footer>数据每 2 秒自动刷新 · 只在本机保存，仅监听 127.0.0.1</footer>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+                          .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+const fmt = n => n.toLocaleString("en-US");
+
+// 物理键盘布局：[键帽文字, 对应的统计键名数组, 宽度单位]
+const K = (t,n,u=1)=>[t,[n],u];
+const LAYOUT = [
+  [K("Esc","esc"), ...["f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12"]
+      .map(n=>K(n.toUpperCase(),n))],
+  [K("`","`"), ...["1","2","3","4","5","6","7","8","9","0","-","="].map(n=>K(n,n)),
+   K("⌫","backspace",2)],
+  [K("Tab","tab",1.5),
+   ...["q","w","e","r","t","y","u","i","o","p","[","]"].map(n=>K(n.toUpperCase(),n)),
+   K("\\","\\",1.5)],
+  [K("Caps","caps_lock",1.75),
+   ...["a","s","d","f","g","h","j","k","l",";","'"].map(n=>K(n.toUpperCase(),n)),
+   K("⏎","enter",2.25)],
+  [K("Shift","shift",2.25),
+   ...["z","x","c","v","b","n","m",",",".","/"].map(n=>K(n.toUpperCase(),n)),
+   K("Shift","shift_r",2.75)],
+  [K("Ctrl","ctrl",1.25),K("Win","cmd",1.25),K("Alt","alt",1.25),K("Space","space",6.25),
+   K("Alt","alt_r",1.25),K("Win","cmd_r",1.25),K("☰","menu",1.25),K("Ctrl","ctrl_r",1.25)],
+];
+
+let cur = "week";
+let lastData = null;
+
+// ---- 主题：月之暗面 / 日之光面 ----
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  document.documentElement.style.colorScheme = t;
+  $("themeBtn").textContent = t === "light" ? "☀ 日之光面" : "🌙 月之暗面";
+  if (lastData) render(lastData);   // 热力色由 JS 计算，切换后需重画
+}
+$("themeBtn").onclick = () => {
+  const t = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  localStorage.setItem("kfm-theme", t);
+  applyTheme(t);
+};
+(() => {
+  const urlTheme = new URLSearchParams(location.search).get("theme");
+  const saved = localStorage.getItem("kfm-theme");
+  applyTheme(urlTheme === "light" || urlTheme === "dark" ? urlTheme : (saved || "dark"));
+})();
+
+// 热力色：暗面=石墨 -> 月光金；光面=米白 -> 日光琥珀。返回背景与前景文字色。
+function heatColor(ratio) {
+  if (document.documentElement.dataset.theme === "light") {
+    const h = 45 + (28 - 45) * ratio;
+    const s = 30 + (96 - 30) * ratio;
+    const l = 88 - (88 - 46) * Math.pow(ratio, 0.9);
+    return { css: `hsl(${h.toFixed(0)} ${s.toFixed(0)}% ${l.toFixed(0)}%)`,
+             fg: l > 64 ? "#5a4a28" : "#fff8ec" };
+  }
+  // 月之暗面：青瓷——固定青绿色相、低饱和渐进，冷键暗青灰、热键温润玉青
+  const s = 8 + (58 - 8) * ratio;
+  const l = 15 + (55 - 15) * Math.pow(ratio, 0.9);
+  return { css: `hsl(162 ${s.toFixed(0)}% ${l.toFixed(0)}%)`,
+           fg: l > 36 ? "#0e2019" : "#eef4f0" };
+}
+
+function render(d) {
+  lastData = d;
+  const map = Object.fromEntries(d.keys);
+  const max = d.keys.length ? d.keys[0][1] : 0;
+
+  // ---- 摘要统计 ----
+  const spanDays = (() => {
+    if (cur === "today") return 1;
+    if (cur === "week") return 7;
+    if (!d.since) return 1;
+    const s = new Date(d.since), e = new Date();
+    return Math.max(1, Math.round((e - s) / 86400000) + 1);
+  })();
+  const top = d.keys[0];
+  const tiles = [
+    { k: { today: "今天输入", week: "近 7 天输入", all: "累计输入" }[cur],
+      v: fmt(d.total), hero: true },
+    { k: "日均输入", v: fmt(Math.round(d.total / spanDays)),
+      s: `按 ${spanDays} 天计` },
+    { k: "最常按的键", v: top ? esc(top[0]) : "—",
+      s: top ? `${fmt(top[1])} 次 · ${d.total ? (top[1] / d.total * 100).toFixed(1) : 0}%` : "" },
+    { k: "键位种类", v: fmt(d.distinct), s: "含鼠标按键" },
+  ];
+  $("tiles").innerHTML = tiles.map(t =>
+    `<div class="tile${t.hero ? " hero" : ""}"><div class="k">${t.k}</div>` +
+    `<div class="v">${t.v}${t.s ? `<small>${t.s}</small>` : ""}</div></div>`).join("");
+
+  // ---- 热力图 ----
+  const shown = new Set();
+  let html = "";
+  for (const row of LAYOUT) {
+    html += '<div class="krow">';
+    for (const [cap, names, u] of row) {
+      const c = names.reduce((s,n)=> s + (map[n]||0), 0);
+      names.forEach(n=>shown.add(n));
+      if (c > 0 && max > 0) {
+        const col = heatColor(Math.pow(c / max, 0.6));
+        const bg = `linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0) 42%), ${col.css}`;
+        html += `<div class="key lit" style="--u:${u};background:${bg}" title="${esc(names.join("/"))}: ${fmt(c)} 次">`
+              + `<span class="cap" style="color:${col.fg};opacity:.82">${esc(cap)}</span>`
+              + `<span class="n" style="color:${col.fg}">${fmt(c)}</span></div>`;
+      } else {
+        html += `<div class="key" style="--u:${u}" title="${esc(names.join("/"))}: 0 次">`
+              + `<span class="cap">${esc(cap)}</span></div>`;
+      }
+    }
+    html += "</div>";
+  }
+  $("kb").innerHTML = html;
+
+  // 布局上没画的键，汇总一行
+  let rest = 0, restKinds = 0;
+  for (const [n,c] of d.keys) if (!shown.has(n)) { rest += c; restKinds++; }
+  $("rest").textContent = d.total
+    ? `布局未画出的其它键（方向键、小键盘、鼠标按键、媒体键等 ${restKinds} 种）共 ${fmt(rest)} 次（${(rest/d.total*100).toFixed(1)}%）`
+    : "";
+
+  // ---- 排行 ----
+  const rankTop = d.keys.slice(0, 15);
+  $("rank").innerHTML = rankTop.length ? rankTop.map(([n,c], i) => {
+    const w = (c / (rankTop[0][1]||1) * 100).toFixed(1);
+    const cls = i === 0 ? " g1" : i === 1 ? " g2" : i === 2 ? " g3" : "";
+    return `<div class="rankrow" title="${esc(n)}">
+      <span class="pos${cls}">${i+1}</span>
+      <span class="name">${esc(n)}</span>
+      <div class="track"><div class="bar" style="width:${w}%"></div></div>
+      <span class="cnt">${fmt(c)}</span>
+      <span class="pct">${d.total ? (c/d.total*100).toFixed(1)+"%" : "-"}</span></div>`;
+  }).join("") : `<div style="color:var(--faint)">该范围内暂无数据</div>`;
+
+  // ---- 每日趋势（周末柱子用灰色区分） ----
+  const dmax = Math.max(...d.days.map(x=>x[1]), 1);
+  $("days").innerHTML = d.days.map(([day,c]) => {
+    const wd = new Date(day + "T12:00:00").getDay();
+    const wknd = wd === 0 || wd === 6;
+    return `<div class="col${c?"":" zero"}${wknd?" wknd":""}" title="${day}${wknd?"（周末）":""}：${fmt(c)} 次">
+       <div class="v" style="--h:${Math.max(c/dmax*100, 3)}%"></div>
+       <span class="l">${day.slice(5)}</span></div>`;
+  }).join("");
+
+  // ---- 时段分布 ----
+  const hmax = Math.max(...d.hours, 1);
+  $("hours").innerHTML = d.hours.map((c,h) =>
+    `<div class="col${c?"":" zero"}" title="${h} 点～${h+1} 点：${fmt(c)} 次">
+       <div class="v" style="--h:${Math.max(c/hmax*100, 3)}%"></div>
+       <span class="l">${h%3===0 ? h : ""}</span></div>`).join("");
+
+  // ---- 顶部合计 ----
+  const since = d.since ? ` · 记录自 ${d.since}` : "";
+  $("total").innerHTML =
+    `${{today:"今天",week:"近 7 天",all:"全部"}[cur]}共 <b>${fmt(d.total)}</b> 次` +
+    `（${fmt(d.distinct)} 种）${since} · 更新于 ${d.now}`;
+}
+
+async function load() {
+  try {
+    const r = await fetch("/api/stats?range=" + cur, {cache: "no-store"});
+    render(await r.json());
+    $("err").style.display = "none";
+  } catch (e) {
+    $("err").style.display = "block";
+  }
+}
+
+document.querySelectorAll(".seg button").forEach(b => {
+  b.onclick = () => {
+    cur = b.dataset.r;
+    document.querySelectorAll(".seg button").forEach(x => x.classList.toggle("on", x === b));
+    load();
+  };
+});
+load();
+setInterval(load, 2000);
+</script>
+</body>
+</html>

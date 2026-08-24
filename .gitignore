@@ -1,0 +1,14 @@
+# 构建产物
+*.exe
+
+# 运行时数据（本机统计，不入库）
+keyboard_stats.db*
+
+# 测试/调试残留
+kfm.pid
+kfm.log
+*.tmp
+
+# Python 原型
+__pycache__/
+*.pyc
