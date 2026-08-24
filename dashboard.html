@@ -203,17 +203,18 @@
   }
   .chart.slim { height: 96px; gap: 4px; }
   .col { flex: 1 1 0; display: flex; flex-direction: column; justify-content: flex-end;
-         align-items: center; gap: 5px; height: 100%; min-width: 0; }
+         align-items: center; gap: 4px; height: 100%; min-width: 0; }
   .col .v {
     height: var(--h); width: 100%; max-width: 36px;
-    border-radius: 5px 5px 2px 2px;
+    border-radius: 4px 4px 2px 2px;
     background: var(--chart-v);
     box-shadow: 0 0 12px var(--chart-glow);
     transition: height .5s ease;
   }
+  .chart.slim .col .v { border-radius: 3px 3px 1px 1px; }
   .col.wknd .v { background: var(--wknd-v); box-shadow: none; }
   .col.zero .v { background: var(--zero-v); box-shadow: none; }
-  .col .l { font-size: 10px; color: var(--faint); white-space: nowrap; }
+  .col .l { font-size: 10px; color: var(--faint); white-space: nowrap; line-height: 1.2; }
 
   #err { display: none; color: var(--err); padding: 10px 26px; }
   footer { color: var(--faint); font-size: 12px; text-align: center; padding: 6px 0 30px; }
@@ -391,21 +392,21 @@ function render(d) {
       <span class="pct">${d.total ? (c/d.total*100).toFixed(1)+"%" : "-"}</span></div>`;
   }).join("") : `<div style="color:var(--faint)">该范围内暂无数据</div>`;
 
-  // ---- 每日趋势（周末柱子用灰色区分） ----
+  // ---- 每日趋势（周末柱子用灰色区分；零值天不画柱，日期标签即占位） ----
   const dmax = Math.max(...d.days.map(x=>x[1]), 1);
   $("days").innerHTML = d.days.map(([day,c]) => {
     const wd = new Date(day + "T12:00:00").getDay();
     const wknd = wd === 0 || wd === 6;
     return `<div class="col${c?"":" zero"}${wknd?" wknd":""}" title="${day}${wknd?"（周末）":""}：${fmt(c)} 次">
-       <div class="v" style="--h:${Math.max(c/dmax*100, 3)}%"></div>
+       ${c ? `<div class="v" style="--h:${Math.max(c/dmax*100, 4)}%"></div>` : ""}
        <span class="l">${day.slice(5)}</span></div>`;
   }).join("");
 
-  // ---- 时段分布 ----
+  // ---- 时段分布（零值小时不画柱，避免标签行里出现杂乱的小短条） ----
   const hmax = Math.max(...d.hours, 1);
   $("hours").innerHTML = d.hours.map((c,h) =>
     `<div class="col${c?"":" zero"}" title="${h} 点～${h+1} 点：${fmt(c)} 次">
-       <div class="v" style="--h:${Math.max(c/hmax*100, 3)}%"></div>
+       ${c ? `<div class="v" style="--h:${Math.max(c/hmax*100, 4)}%"></div>` : ""}
        <span class="l">${h%3===0 ? h : ""}</span></div>`).join("");
 
   // ---- 顶部合计 ----
