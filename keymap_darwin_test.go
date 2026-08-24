@@ -2,33 +2,52 @@ package main
 
 import "testing"
 
-// TestCapsLockUsesPhysicalDownBit 回归 review 指出的 bug：
-// 曾用 NX_ALPHASHIFTMASK(0x00010000) —— 那是 LED 锁定态而非物理按下位，
-// 导致「开 Caps」一次按下计两次（按下与松开时该位都是 1）、
-// 「关 Caps」一次都不计（两次都是 0）。
-// 现用 NX_DEVICE_ALPHASHIFT_STATELESS_MASK(0x00000080)，语义与其它修饰键一致。
-func TestCapsLockUsesPhysicalDownBit(t *testing.T) {
+// TestCapsLockCountsOnLEDEdge 用真机实测数据锁住 Caps Lock 的计数方式。
+//
+// 观测记录（Apple 内置键盘 + CGEventTap，按 Caps Lock 三次）：
+//
+//	开 -> flags=0x00010100  LED=1  INDEP_SL=0  DEV_SL=0
+//	关 -> flags=0x00000100  LED=0  INDEP_SL=0  DEV_SL=0
+//	开 -> flags=0x00010100 ...（严格交替）
+//
+// 两个 STATELESS 位头文件里有、系统却从不设置，所以不能用它们判断按下
+// （曾用 0x00000080，结果永远为假 —— Caps Lock 一次都不计）。
+// LED 位每次物理按下翻转一次，因此按翻转沿计数。
+func TestCapsLockCountsOnLEDEdge(t *testing.T) {
 	const caps = 0x39
-	const ledOn = 0x00010000 // 锁定态：开灯期间一直为 1
+	const ledOn = 0x00010100  // 实测：开灯事件
+	const ledOff = 0x00000100 // 实测：关灯事件（0x100 是 NonCoalesced 基线位）
 
-	// 开灯的那次按下：物理位 1 + LED 位 1 -> 计一次
-	if !modifierPressed(caps, maskCaps|ledOn) {
-		t.Error("开 Caps 的按下应计数")
+	capsLED.Store(false) // 从"灯灭"起算
+
+	// 连按三次：每次都应恰好计一次
+	for i, flags := range []uint64{ledOn, ledOff, ledOn} {
+		if !modifierPressed(caps, flags) {
+			t.Errorf("第 %d 次按 Caps Lock 应计数（flags=0x%08X）", i+1, flags)
+		}
 	}
-	// 紧随其后的松开：LED 仍亮但物理位已清零 -> 不能再计
+
+	// 同一状态重复上报（休眠唤醒、多键盘同步）不该重复计数
 	if modifierPressed(caps, ledOn) {
-		t.Error("开 Caps 后的松开不应计数（旧 bug：这里会重复计数）")
+		t.Error("锁定态未变化时不应计数")
 	}
-	// 关灯的那次按下：LED 位已是 0，但物理位为 1 -> 必须计数
-	if !modifierPressed(caps, maskCaps) {
-		t.Error("关 Caps 的按下应计数（旧 bug：这里会漏计）")
+
+	// 若系统某天改成按下/松开各发一次事件，翻转沿计数依然只计一次：
+	// 一对事件里 LED 保持不变，第二次被上面这条规则挡掉。
+}
+
+// TestCapsLockRegressionStatelessBitsUnused 固定住"不能用 STATELESS 位"这个教训。
+func TestCapsLockRegressionStatelessBitsUnused(t *testing.T) {
+	const caps = 0x39
+	capsLED.Store(false)
+	// 实测的开灯 flags 里，两个 STATELESS 位都是 0。
+	// 若有人把判定改回读这些位，这里会失败。
+	const measuredOn = 0x00010100
+	if measuredOn&0x00000080 != 0 || measuredOn&0x01000000 != 0 {
+		t.Fatal("测试数据写错了：实测 flags 里 STATELESS 位应为 0")
 	}
-	// 关灯后的松开：两位都为 0 -> 不计
-	if modifierPressed(caps, 0) {
-		t.Error("关 Caps 后的松开不应计数")
-	}
-	if maskCaps != 0x00000080 {
-		t.Errorf("maskCaps = 0x%08X，应为 NX_DEVICE_ALPHASHIFT_STATELESS_MASK", maskCaps)
+	if !modifierPressed(caps, measuredOn) {
+		t.Error("按实测 flags 应能计数 —— 说明判定又依赖了系统不设置的位")
 	}
 }
 
@@ -60,6 +79,14 @@ func TestModifierPressedDedup(t *testing.T) {
 	// fn 不统计
 	if modifierPressed(fn, 0xFFFFFFFF) {
 		t.Error("fn 不该计数")
+	}
+	// 实测数据：左 Shift 按下 flags=0x00020102，松开 0x00000100
+	capsLED.Store(false)
+	if !modifierPressed(lshift, 0x00020102) {
+		t.Error("实测的左 Shift 按下 flags 应计数")
+	}
+	if modifierPressed(lshift, 0x00000100) {
+		t.Error("实测的左 Shift 松开 flags 不应计数")
 	}
 }
 

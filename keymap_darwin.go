@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"sync/atomic"
+)
 
 // 修饰键的 device-dependent 掩码，取自 SDK 的 IOLLEvent.h（NX_DEVICE*KEYMASK）。
 // CGEventFlags 里这些位区分左右，因此不必自己记住上一次状态：
@@ -14,15 +17,27 @@ const (
 	maskLAlt   = 0x00000020
 	maskRAlt   = 0x00000040
 	maskRCtrl  = 0x00002000
-	// Caps Lock 必须用 STATELESS（物理按下）位，不能用 NX_ALPHASHIFTMASK：
-	// 后者是 LED 锁定态，开灯后按键松开时仍为 1（一次按下计两次），
-	// 而关灯的那次按下它是 0（漏计）。STATELESS 位与其它修饰键语义一致。
-	maskCaps = 0x00000080 // NX_DEVICE_ALPHASHIFT_STATELESS_MASK
+
+	// Caps Lock 是唯一的例外：它没有“物理按下”位可用。
+	// 真机实测（Apple 内置键盘 + CGEventTap，见 TestCapsLockCountsOnLEDEdge）：
+	//   开 -> flags=0x00010100，关 -> flags=0x00000100
+	// 两个 STATELESS 位（NX_ALPHASHIFT_STATELESS_MASK 0x01000000、
+	// NX_DEVICE_ALPHASHIFT_STATELESS_MASK 0x00000080）始终为 0，头文件里有但系统不设置。
+	// 只有 LED 锁定位会变，且每次物理按下翻转一次，所以按“翻转沿”计数。
+	maskCapsLED = 0x00010000 // NX_ALPHASHIFTMASK
 )
 
+// capsLED 记住上一次看到的 Caps Lock 锁定态，用于按翻转沿计数。
+// 回调只在 run loop 单线程上跑，用 atomic 仅为与 Go 侧读写安全。
+var capsLED atomic.Bool
+
 // modifierPressed 判断这次 flagsChanged 是“按下”而非“松开”。
-// 少了这一步每按一次 Shift 会计成 2 次。
+// 少了这一步每按一次修饰键会计成 2 次。
 func modifierPressed(keycode uint32, flags uint64) bool {
+	if keycode == 0x39 { // Caps Lock：锁定态翻转即一次按下
+		on := flags&maskCapsLED != 0
+		return capsLED.Swap(on) != on
+	}
 	var mask uint64
 	switch keycode {
 	case 0x3B:
@@ -41,8 +56,6 @@ func modifierPressed(keycode uint32, flags uint64) bool {
 		mask = maskLAlt
 	case 0x3D:
 		mask = maskRAlt
-	case 0x39:
-		mask = maskCaps
 	default:
 		return false // fn 等不统计
 	}
