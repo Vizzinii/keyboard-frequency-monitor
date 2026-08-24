@@ -47,3 +47,19 @@ func TestStatsPayloadJSONShape(t *testing.T) {
 		t.Fatal("缺少 since 字段")
 	}
 }
+
+func TestRangeStart(t *testing.T) {
+	now := time.Now()
+	if got := rangeStart("today"); got != now.Format(dateLayout) {
+		t.Errorf("today = %q, want %q", got, now.Format(dateLayout))
+	}
+	if got := rangeStart("week"); got != now.AddDate(0, 0, -6).Format(dateLayout) {
+		t.Errorf("week = %q, want %q", got, now.AddDate(0, 0, -6).Format(dateLayout))
+	}
+	if got := rangeStart("all"); got != "" {
+		t.Errorf("all = %q, want 空串", got)
+	}
+	if got := rangeStart("bogus"); got != "" { // 未知范围走默认分支
+		t.Errorf("未知范围 = %q, want 空串", got)
+	}
+}
