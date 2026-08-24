@@ -103,10 +103,10 @@ KeyboardFrequencyMonitor.exe [-port 8321] [-reset] [-export f.csv] [-no-tray] [-
 
 ```bash
 go build -trimpath -ldflags "-s -w -H windowsgui" -o KeyboardFrequencyMonitor.exe .
-
-# 全部测试（单元 + 端到端）在自包含模块 tests/ 里：
-cd tests && ./sync.sh && go test ./...
 ```
+
+全部单元与端到端测试位于本地自包含模块 `tests/`（**仅本地保留，不入库**）：
+`cd tests && ./sync.sh && go test ./...`。
 
 网络受限（proxy.golang.org 不可达）时先设置模块镜像：`export GOPROXY=https://goproxy.cn,direct`。
 
@@ -125,7 +125,7 @@ cd tests && ./sync.sh && go test ./...
 ├── tray.go            托盘图标（打开面板 / 暂停 / 重装钩子 / 退出）
 ├── dashboard.html     网页面板（编译期内嵌进 exe）
 ├── assets/icon.ico    托盘图标（tools/genicon 可重新生成）
-└── tests/             自包含测试模块：全部单元测试 + 黑盒端到端测试
+└── tests/             自包含测试模块：全部单元测试 + 黑盒端到端测试（仅本地保留，不入库）
 ```
 
 ## License

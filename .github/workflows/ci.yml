@@ -26,14 +26,6 @@ jobs:
       - name: Test
         run: go test ./...
 
-      # 自包含测试套件（tests/ 内全部单元 + 黑盒端到端测试）
-      - name: Tests (tests/)
-        working-directory: tests
-        run: |
-          ./sync.sh
-          go vet -unsafeptr=false ./...
-          go test ./...
-
       - name: Build
         run: go build -trimpath -ldflags "-s -w -H windowsgui" -o KeyboardFrequencyMonitor.exe .
 
