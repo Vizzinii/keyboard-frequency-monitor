@@ -1,10 +1,14 @@
 # 构建产物
 *.exe
 KeyboardFrequencyMonitor
+KeyboardFrequencyMonitor-macos
 kfm
 
 # 运行时数据（本机统计，不入库）
 keyboard_stats.db*
+
+# 看门狗运行日志
+monitor.log
 
 # 测试/调试残留
 kfm.pid
@@ -13,3 +17,6 @@ kfm.log
 
 # macOS
 .DS_Store
+
+# ZCode 会话产物
+.zcode/
