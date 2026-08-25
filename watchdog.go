@@ -1,36 +1,13 @@
-//go:build windows
-
 package main
 
 import (
 	"log"
 	"sync"
 	"time"
-	"unsafe"
 )
 
-var (
-	getLastInputInfo = user32.NewProc("GetLastInputInfo")
-	getTickCount64P  = kernel32.NewProc("GetTickCount64")
-)
-
-type lastInputInfo struct {
-	cbSize uint32
-	dwTime uint32
-}
-
-// lastInputAgo 返回系统范围内最近一次用户输入距今的时间。
-// dwTime 是 32 位 tick，uint32 减法天然处理回绕；调用失败时按"很久以前"处理（视为空闲）。
-func lastInputAgo() time.Duration {
-	var lii lastInputInfo
-	lii.cbSize = uint32(unsafe.Sizeof(lii))
-	ret, _, _ := getLastInputInfo.Call(uintptr(unsafe.Pointer(&lii)))
-	if ret == 0 {
-		return time.Hour
-	}
-	now, _, _ := getTickCount64P.Call()
-	return time.Duration(uint32(now)-lii.dwTime) * time.Millisecond
-}
+// lastInputAgo 由平台文件提供（watchdog_windows.go / watchdog_darwin.go）：
+// 返回系统范围内最近一次用户输入距今的时间，不依赖我们自己的钩子。
 
 // Health 是暴露给 /api/health、面板与托盘的状态快照。
 // 锁用指针持有，避免 Snapshot/swap 时值拷贝触发 vet 的 copylocks 检查。
@@ -50,6 +27,14 @@ type Health struct {
 
 func NewHealth() *Health {
 	return &Health{mu: &sync.Mutex{}, Status: "ok", Uptime: time.Now()}
+}
+
+// setOff 标记看门狗未运行（-watchdog-off）。没有它状态会停在初始的 "ok"，
+// 托盘和面板会谎报"记录正常"，而其实没有任何东西在监控钩子。
+func (h *Health) setOff() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.Status, h.Msg = "off", "看门狗已关闭，钩子失效不会自动恢复"
 }
 
 func (h *Health) Snapshot() Health {

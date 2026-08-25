@@ -218,23 +218,13 @@
   .chart.slim .col .l { font-size: 9px; }
 
   #err { display: none; color: var(--err); padding: 10px 26px; }
-  #healthBar {
-    max-width: 1180px; margin: 14px auto 0; padding: 9px 16px;
-    border-radius: 10px; font-size: 13px; display: none;
-    background: rgba(255, 180, 100, 0.08);
-    border: 1px solid rgba(255, 180, 100, 0.28);
-    color: var(--text);
+  /* 记录状态横幅：正常时不占位，异常/自愈过才显示 */
+  #hbanner {
+    display: none; margin: 12px 26px 0; padding: 9px 14px;
+    border-radius: 10px; font-size: 13px;
+    border: 1px solid var(--line); background: var(--track);
   }
-  #healthBar.bad {
-    background: rgba(255, 107, 107, 0.10);
-    border-color: rgba(255, 107, 107, 0.35);
-    color: var(--err);
-  }
-  #healthBar.paused {
-    background: rgba(150, 170, 160, 0.08);
-    border-color: var(--line);
-    color: var(--dim);
-  }
+  #hbanner.bad { color: var(--err); border-color: var(--err); }
   footer { color: var(--faint); font-size: 12px; text-align: center; padding: 6px 0 30px; }
 </style>
 </head>
@@ -250,8 +240,8 @@
   <button id="themeBtn" class="theme-btn" title="切换深浅色主题">🌙 月之暗面</button>
   <div id="total">加载中…</div>
 </header>
-<div id="healthBar"></div>
 <div id="err">无法连接本地记录程序 —— 请确认 KeyboardFrequencyMonitor 正在运行。</div>
+<div id="hbanner"></div>
 
 <main>
   <div class="tiles" id="tiles"></div>
@@ -289,6 +279,7 @@ const fmt = n => n.toLocaleString("en-US");
 
 // 物理键盘布局：[键帽文字, 对应的统计键名数组, 宽度单位]
 const K = (t,n,u=1)=>[t,[n],u];
+// 前 5 行两平台通用；底排修饰键的物理顺序不同，见 BOTTOM_WIN / BOTTOM_MAC。
 const LAYOUT = [
   [K("Esc","esc"), ...["f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12"]
       .map(n=>K(n.toUpperCase(),n))],
@@ -303,8 +294,15 @@ const LAYOUT = [
   [K("Shift","shift",2.25),
    ...["z","x","c","v","b","n","m",",",".","/"].map(n=>K(n.toUpperCase(),n)),
    K("Shift","shift_r",2.75)],
-  [K("Ctrl","ctrl",1.25),K("Win","cmd",1.25),K("Alt","alt",1.25),K("Space","space",6.25),
-   K("Alt","alt_r",1.25),K("Win","cmd_r",1.25),K("☰","menu",1.25),K("Ctrl","ctrl_r",1.25)],
+];
+const BOTTOM_WIN = [
+  K("Ctrl","ctrl",1.25),K("Win","cmd",1.25),K("Alt","alt",1.25),K("Space","space",6.25),
+  K("Alt","alt_r",1.25),K("Win","cmd_r",1.25),K("☰","menu",1.25),K("Ctrl","ctrl_r",1.25),
+];
+// Mac 底排真实顺序：⌃ ⌥ ⌘ space ⌘ ⌥（无 Win/菜单键；fn 不统计所以不画）
+const BOTTOM_MAC = [
+  K("⌃","ctrl",1.4),K("⌥","alt",1.4),K("⌘","cmd",1.7),K("Space","space",6.4),
+  K("⌘","cmd_r",1.7),K("⌥","alt_r",1.4),K("⌃","ctrl_r",1.4),
 ];
 
 let cur = "week";
@@ -372,9 +370,10 @@ function render(d) {
     `<div class="v">${t.v}${t.s ? `<small>${t.s}</small>` : ""}</div></div>`).join("");
 
   // ---- 热力图 ----
+  const isMac = d.os === "darwin";
   const shown = new Set();
   let html = "";
-  for (const row of LAYOUT) {
+  for (const row of [...LAYOUT, isMac ? BOTTOM_MAC : BOTTOM_WIN]) {
     html += '<div class="krow">';
     for (const [cap, names, u] of row) {
       const c = names.reduce((s,n)=> s + (map[n]||0), 0);
@@ -438,6 +437,27 @@ function render(d) {
     `（${fmt(d.distinct)} 种）${since} · 更新于 ${d.now}`;
 }
 
+// 记录状态横幅：只在需要用户知情时出现（异常、暂停、刚自愈过），正常时隐藏。
+async function loadHealth() {
+  const el = $("hbanner");
+  try {
+    const h = await (await fetch("/api/health", {cache: "no-store"})).json();
+    const recentHeal = h.lastHeal &&
+      Date.now() - new Date(h.lastHeal).getTime() < 10 * 60 * 1000;
+    const text = {
+      degraded: "🔴 记录异常：自动修复多次未成功，请手动重启程序",
+      paused:   "⚪ 记录已暂停 —— 托盘菜单可恢复",
+      healed:   "🟢 " + (h.msg || "刚刚自动修复过一次，记录已恢复"),
+      off:      "⚪ 看门狗已关闭（-watchdog-off）—— 钩子失效不会自动恢复",
+    }[h.status] || (recentHeal ? "🟢 " + (h.msg || "最近自动修复过一次，记录已恢复") : "");
+    el.style.display = text ? "block" : "none";
+    el.className = h.status === "degraded" ? "bad" : "";
+    if (text) el.textContent = text;
+  } catch (e) {
+    el.style.display = "none"; // 连不上时由 #err 提示，不重复报
+  }
+}
+
 async function load() {
   try {
     const r = await fetch("/api/stats?range=" + cur, {cache: "no-store"});
@@ -446,30 +466,7 @@ async function load() {
   } catch (e) {
     $("err").style.display = "block";
   }
-}
-
-// 健康横幅：异常时提示，避免"计数停了却没人发现"
-async function loadHealth() {
-  try {
-    const h = await (await fetch("/api/health", {cache: "no-store"})).json();
-    const bar = $("healthBar");
-    if (h.status === "degraded") {
-      bar.className = "bad"; bar.style.display = "block";
-      bar.textContent = "⚠ 记录异常：多次自动修复失败，已停止自动重启。请退出程序后重新启动。";
-    } else if (h.status === "paused") {
-      bar.className = "paused"; bar.style.display = "block";
-      bar.textContent = "⏸ 记录已暂停（托盘菜单可恢复）。";
-    } else if (h.status === "off") {
-      bar.className = "paused"; bar.style.display = "block";
-      bar.textContent = "🛠 看门狗已关闭（启动参数 -watchdog-off），钩子失效时不会自动修复。";
-    } else if (h.status === "healed" ||
-               (h.lastHeal && Date.now() - new Date(h.lastHeal).getTime() < 10 * 60 * 1000)) {
-      bar.className = ""; bar.style.display = "block";
-      bar.textContent = "🔧 " + (h.msg || "最近自动修复过一次，记录已恢复") + "。";
-    } else {
-      bar.style.display = "none";
-    }
-  } catch (e) { /* 面板连不上时由 #err 提示 */ }
+  loadHealth();
 }
 
 document.querySelectorAll(".seg button").forEach(b => {
@@ -480,8 +477,7 @@ document.querySelectorAll(".seg button").forEach(b => {
   };
 });
 load();
-loadHealth();
-setInterval(() => { load(); loadHealth(); }, 2000);
+setInterval(load, 2000);
 </script>
 </body>
 </html>

@@ -12,12 +12,12 @@ import (
 //go:embed dashboard.html
 var dashboardHTML []byte
 
-// startServer 只监听 127.0.0.1。
+// startServer 只监听 127.0.0.1，返回 (监听端口, 已有实例端口)；监听端口为 0 表示没起来。
 // 非重启模式：绑定前先探测是否已有本程序实例在跑——否则第二个实例会换个端口
 // 继续跑并再装一个钩子，导致每个按键被计两次；从 want 端口开始找第一个可用的。
-// 重启模式：只绑定 want 端口，短重试以等旧实例退出后接管（绝不跳到相邻端口，
+// 重启模式：只绑定 want 端口，短重试等旧实例退出后接管（绝不跳到相邻端口，
 // 否则新旧实例会短暂并存、重复计数）。
-func startServer(s *Store, h *Health, want int, restart bool) (*http.Server, int, int) {
+func startServer(s *Store, h *Health, want int, restart bool) (int, int) {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/stats", withMarker(func(w http.ResponseWriter, req *http.Request) {
@@ -53,33 +53,34 @@ func startServer(s *Store, h *Health, want int, restart bool) (*http.Server, int
 
 	if !restart {
 		if p := probeExisting(want); p != 0 {
-			return nil, 0, p
+			return 0, p
 		}
 		for p := want; p < want+10; p++ {
 			ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(p)))
 			if err != nil {
 				continue
 			}
-			return serve(mux, ln), p, 0
+			serve(mux, ln)
+			return p, 0
 		}
-		return nil, 0, probeExisting(want)
+		return 0, probeExisting(want)
 	}
 
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(want))
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		ln, err := net.Listen("tcp", addr)
 		if err == nil {
-			return serve(mux, ln), want, 0
+			serve(mux, ln)
+			return want, 0
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	return nil, 0, 0
+	return 0, 0
 }
 
-func serve(mux *http.ServeMux, ln net.Listener) *http.Server {
+func serve(mux *http.ServeMux, ln net.Listener) {
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }() // 进程退出即结束，无需优雅关闭
-	return srv
 }
 
 // withMarker 给响应加本程序标识头，probeExisting 凭它识别"这是本程序"，

@@ -3,6 +3,7 @@ package main
 import "fmt"
 
 // vkLabel 把 Windows 虚拟键码转成统计用的统一键名。
+// 输出词表必须与 keymap_darwin.go 完全一致，否则 dashboard.html 的热力图认不出来。
 // 与网页热力图的命名保持一致；一律按物理键统计（Shift+A 计入 a，
 // 这样才能反映“哪个键敲得多”，也避免 shifted 符号散落到布局之外）。
 func vkLabel(vk uint32) string {

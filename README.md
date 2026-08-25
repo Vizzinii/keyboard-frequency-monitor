@@ -1,11 +1,11 @@
 # 键盘频率监视器 (KeyboardFrequencyMonitor)
 
-一个轻量的 Windows 常驻小工具：后台统计**每个键盘按键和鼠标按键**的按下次数，
+一个轻量的 **Windows / macOS** 常驻小工具：后台统计**每个键盘按键和鼠标按键**的按下次数，
 用浏览器面板查看**键位热力图、使用排行、每日趋势、时段分布**。
 
 ## 特性
 
-- 📦 **单文件、免安装**：一个 exe，无运行时依赖，统计面板直接内嵌其中
+- 📦 **单文件、免安装**：一个可执行文件，无运行时依赖，统计面板直接内嵌其中
 - ⌨️🖱️ **全局生效**：切换到其它窗口照常统计，键盘与鼠标按键都算
 - 💾 **崩溃安全**：数据每秒批量写入 SQLite，强杀进程 / 断电最多丢最后一秒，
   不依赖"正常退出"来保存；退出时自动合并 WAL，备份就是复制单个 db 文件
@@ -13,25 +13,48 @@
   （带冷却防崩溃循环），面板与托盘实时显示记录健康状态
 - 🌗 **双主题面板**：「月之暗面」青瓷暗色 / 「日之光面」琥珀亮色，选择自动记忆
 - 🔒 **隐私优先**：只计数不记录内容；数据仅存本机，面板只监听 127.0.0.1
-- 🪟 **托盘控制**：左键点图标开面板，右键可暂停记录、退出
+- 🪟 **托盘 / 菜单栏控制**：左键点图标开面板，右键可暂停记录、退出
 
 ## 下载使用
 
-到 [Releases](../../releases) 下载 `KeyboardFrequencyMonitor.exe`，放在任意你有写权限的目录，双击即用：
+到 [Releases](../../releases) 下载对应平台的文件，放在任意你有写权限的目录：
+
+| 平台 | 文件 |
+| --- | --- |
+| Windows 10/11 | `KeyboardFrequencyMonitor.exe` |
+| macOS 10.15+ | `KeyboardFrequencyMonitor-macos` |
 
 - 启动后自动在浏览器打开统计面板（`http://127.0.0.1:8321`）
-- 右下角托盘出现图标：**左键单击 = 打开面板**；右键菜单可暂停记录、退出
-- 关闭浏览器标签页不影响记录；想停止记录请在托盘菜单点"退出"
+- 托盘 / 菜单栏出现图标：**左键单击 = 打开面板**；右键菜单可暂停记录、退出
+- 关闭浏览器标签页不影响记录；想停止记录请在菜单点"退出"
 
-> 首次运行可能被 Windows SmartScreen 或杀毒软件提示——因为程序使用了全局输入钩子
-> （这是实现跨窗口统计的必要手段），且未做代码签名。请选择"仍要运行"/添加信任。
-> 程序完全开源，可以自行审查或从源码构建。
+### Windows 首次运行
+
+可能被 SmartScreen 或杀毒软件提示——因为程序使用了全局输入钩子（这是实现跨窗口
+统计的必要手段），且未做代码签名。请选择"仍要运行"/添加信任。
+
+### macOS 首次运行
+
+macOS 要求全局键盘监听必须显式授权，程序会引导你完成两步：
+
+1. **授予「输入监控」权限**：首次运行会弹出系统授权框；若已错过，
+   到 **系统设置 → 隐私与安全性 → 输入监控** 手动勾选本程序，然后**重新启动它**。
+   未授权时程序会打印指引并退出，不会静默地收不到数据。
+2. **放行未签名程序**：首次可能提示"无法验证开发者"。
+   到 **系统设置 → 隐私与安全性** 点"仍要打开"，或在终端执行：
+
+   ```bash
+   chmod +x KeyboardFrequencyMonitor-macos
+   xattr -d com.apple.quarantine KeyboardFrequencyMonitor-macos
+   ```
+
+程序完全开源，可以自行审查或从源码构建。
 
 ## 面板功能
 
 | 区块 | 内容 |
 | --- | --- |
-| 键位热力图 | 真实键盘布局，色块越亮表示该范围内按得越多 |
+| 键位热力图 | 真实键盘布局，色块越亮表示该范围内按得越多（mac 上修饰键显示为 ⌘/⌥/⌃） |
 | 使用排行 | Top 15 键位的次数与占比条形图 |
 | 每日趋势 | 最近 14 天每天的输入总量（周末灰色显示） |
 | 时段分布 | 一天中各小时的输入量（看看你几点打字最猛） |
@@ -40,15 +63,15 @@
 
 ## 数据存储在哪
 
-统计保存在 **exe 同目录**的 `keyboard_stats.db`（SQLite 单文件，按"键 × 日期 × 小时"聚合）。
+统计保存在**可执行文件同目录**的 `keyboard_stats.db`（SQLite 单文件，按"键 × 日期 × 小时"聚合）。
 这是刻意的绿色软件设计：整个文件夹拷到哪里，配置和数据就跟到哪里，备份 = 复制这一个文件。
-程序对它只做追加统计，卸载时删掉 exe 和这个 db 文件即可完全清除痕迹。
+程序对它只做追加统计，卸载时删掉可执行文件和这个 db 文件即可完全清除痕迹。
 
 ## 命令行参数
 
 ```
-KeyboardFrequencyMonitor.exe [-port 8321] [-reset] [-export f.csv] [-no-tray] [-open-panel=false]
-                             [-watchdog-off] [-watchdog-win N]
+KeyboardFrequencyMonitor [-port 8321] [-reset] [-export f.csv] [-no-tray] [-open-panel=false]
+                         [-watchdog-off] [-watchdog-win N]
 ```
 
 | 参数 | 说明 |
@@ -83,26 +106,56 @@ KeyboardFrequencyMonitor.exe [-port 8321] [-reset] [-export f.csv] [-no-tray] [-
 
 托盘右键菜单里的「重新安装钩子」可随时手动触发一次重装。
 
+## 记录失效的自我修复
+
+全局输入钩子有一种讨厌的失效方式：**进程活着、面板能开，但按键再也进不来**。
+Windows 上是钩子线程的消息泵退出或钩子被系统移除，macOS 上是 CGEventTap 被系统
+禁用或 run loop 退出。两种情况系统都不报错，旧版会无限期安静空转。
+
+现在有三层应对：
+
+1. **存活看门狗** —— 每秒检查钩子线程/run loop 是否还在、tap 是否仍被系统启用，
+   失效即自动重装
+2. **事件流看门狗** —— 用系统级 API（Windows `GetLastInputInfo`、
+   macOS `CGEventSourceSecondsSinceLastEventType`，都不经过我们的钩子）对比：
+   判定窗口内我方零事件但系统持续有输入 → 判定失效并重装。
+   用户真空闲时两边都静默，不会误报
+3. **自动重启兜底** —— 5 分钟内重装 3 次仍不稳定则自我重启（新实例接管原端口，
+   新旧钩子不重叠）；重启后 5 分钟冷却期内不再自动重启，转为提示手动重启
+
+状态可见性：面板顶部异常时出现横幅，托盘菜单首项显示"记录：正常/异常"，
+`/api/health` 返回完整状态（钩子存活、最后事件时间、自愈次数等），
+自愈与重启事件写入可执行文件同目录的 `monitor.log`。
+
+托盘菜单里的 **重新安装钩子** 可手动触发一次重装（正常时点了也无副作用）。
+
 ## 已知限制
 
-- **仅支持 Windows 10/11**。监听层依赖 Win32 低级钩子；macOS（CGEventTap +
-  辅助功能权限 + 签名公证）与 Linux（Wayland）暂未支持，欢迎讨论
 - **按物理键统计**：Shift+A 计入 `a`，`!` 计入 `1`——反映的是"哪个键敲得多"，
   无法还原你实际输入的字符；中文输入法期间记录的是拼音字母键
 - **粒度为小时**：数据按"键 × 日期 × 小时"聚合，可以看趋势和分布，
   但不能回放某一次按键的精确时刻（这正是"只计数不记录内容"的代价）
-- **管理员窗口收不到**：出于系统安全机制（UIPI），以管理员身份运行的窗口里
-  敲的键不会被统计到
+- **未签名**：Windows 会触发 SmartScreen / 杀软提示，macOS 需手动放行（见上）；
+  个别游戏的反作弊系统也可能拦截全局钩子
+- **Windows**：以管理员身份运行的窗口里敲的键不会被统计到（系统 UIPI 安全机制）
+- **macOS**：必须授予「输入监控」权限；权限是按可执行文件路径记住的，
+  移动或替换文件后需要重新授权
+- **Linux 暂未支持**：Wayland 下没有可靠的全局监听方案
 - **主题选择存在浏览器里**：换浏览器或清理站点数据后，主题会回到默认的月之暗面
-- 未签名 exe 会触发 SmartScreen / 杀软提示（见上）；个别游戏的反作弊系统
-  也可能拦截全局钩子
 
 ## 从源码构建
 
-需要 Go 1.22+：
+需要 Go 1.22+。macOS 还需要 Xcode Command Line Tools（`xcode-select --install`），
+因为事件监听与菜单栏图标走 cgo。
 
 ```bash
+# macOS（当前平台）
+go build -trimpath -ldflags "-s -w" -o KeyboardFrequencyMonitor .
+
+# Windows
 go build -trimpath -ldflags "-s -w -H windowsgui" -o KeyboardFrequencyMonitor.exe .
+
+go vet -unsafeptr=false ./...   # unsafeptr 对 Win32 钩子回调误报，故豁免
 ```
 
 全部单元与端到端测试位于本地自包含模块 `tests/`（**仅本地保留，不入库**）：
@@ -110,23 +163,40 @@ go build -trimpath -ldflags "-s -w -H windowsgui" -o KeyboardFrequencyMonitor.ex
 
 网络受限（proxy.golang.org 不可达）时先设置模块镜像：`export GOPROXY=https://goproxy.cn,direct`。
 
-推送 `v*` 标签后，GitHub Actions 会自动构建并发布对应版本的 exe（见 `.github/workflows/ci.yml`）。
+推送 `v*` 标签后，GitHub Actions 会同时构建 Windows 与 macOS 版本并发布（见 `.github/workflows/ci.yml`）。
 
 ## 项目结构
 
+平台相关代码用 Go 的文件名后缀约定（`_windows.go` / `_darwin.go`）区分，无需手写构建标签。
+
 ```
-├── main.go            入口、命令行参数、单实例仲裁与自动重启
-├── recorder.go        键盘/鼠标低级钩子 + 内存缓冲（安装代际化自愈）
-├── singleinstance.go  内核命名互斥体，保证单实例
-├── keymap.go          虚拟键码 -> 键名映射
-├── store.go           SQLite 存储（每秒批量事务写入）
-├── stats.go           统计聚合与 API 载荷
-├── server.go          内嵌面板的本地 HTTP 服务
-├── tray.go            托盘图标（打开面板 / 暂停 / 重装钩子 / 退出）
-├── dashboard.html     网页面板（编译期内嵌进 exe）
-├── assets/icon.ico    托盘图标（tools/genicon 可重新生成）
-└── tests/             自包含测试模块：全部单元测试 + 黑盒端到端测试（仅本地保留，不入库）
+├── main.go                 入口、命令行参数、单实例仲裁与自动重启（跨平台）
+├── recorder.go             事件缓冲、暂停开关与落盘重试（跨平台）
+├── recorder_windows.go     Win32 低级键鼠钩子（安装代际化自愈）
+├── recorder_darwin.go      CGEventTap + 输入监控权限检查
+├── singleinstance.go       内核命名互斥体，保证单实例（Windows）
+├── keymap_windows.go       Windows 虚拟键码 -> 键名
+├── keymap_darwin.go        macOS 键码 -> 键名（+ 修饰键按下/松开去重）
+├── store.go                SQLite 存储（每秒批量事务写入）
+├── stats.go                统计聚合与 API 载荷
+├── server.go               内嵌面板的本地 HTTP 服务（含 /api/health）
+├── watchdog.go             看门狗与健康状态（跨平台主体）
+├── watchdog_logic.go       失效判定纯函数（可单测）
+├── watchdog_windows.go     GetLastInputInfo
+├── watchdog_darwin.go      CGEventSourceSecondsSinceLastEventType
+├── restart_windows.go      自动重启的进程分离参数
+├── restart_darwin.go       同上（Setsid）
+├── tray.go                 托盘/菜单栏菜单（跨平台，含状态项）
+├── icon_windows.go         内嵌 ICO 图标
+├── icon_darwin.go          内嵌 PNG 图标（NSImage 不吃 ICO）
+├── browser_windows.go      打开默认浏览器（rundll32）
+├── browser_darwin.go       打开默认浏览器（open）
+├── dashboard.html          网页面板（编译期内嵌）
+├── assets/                 托盘图标（tools/genicon 可重新生成两种格式）
+└── tests/                  自包含测试模块：单元 + 黑盒端到端（仅本地保留，不入库）
 ```
+
+两个平台的 `vkLabel` **必须输出相同的键名词表**，否则面板热力图认不出键位。
 
 ## License
 

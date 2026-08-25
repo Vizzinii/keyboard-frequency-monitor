@@ -1,5 +1,3 @@
-//go:build windows
-
 package main
 
 import (
@@ -18,8 +16,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"golang.org/x/sys/windows"
 )
 
 func main() {
@@ -59,7 +55,7 @@ func main() {
 	exeDir := filepath.Dir(exePath)
 	dbPath := filepath.Join(exeDir, "keyboard_stats.db")
 
-	// 日志同时输出到控制台和 exe 目录的 monitor.log，自愈/重启事件有据可查
+	// 日志同时输出到控制台和可执行文件目录的 monitor.log，自愈/重启事件有据可查
 	if lf, err := openLogAppend(filepath.Join(exeDir, "monitor.log")); err == nil {
 		defer lf.Close()
 		log.SetOutput(io.MultiWriter(os.Stderr, lf))
@@ -74,13 +70,6 @@ func main() {
 			}
 		}
 		log.Println("[已清空所有统计数据]")
-	}
-
-	if *restart {
-		// 旧实例退出前仍占着端口和数据库，先等它释放再接管
-		if !waitPortFree(*port, 10*time.Second) {
-			log.Fatalf("自动重启：等待端口 %d 释放超时，请手动启动", *port)
-		}
 	}
 
 	store, err := OpenStore(dbPath)
@@ -98,9 +87,16 @@ func main() {
 		return
 	}
 
+	if *restart {
+		// 旧实例退出前仍占着端口和数据库，先等它释放再接管
+		if !waitPortFree(*port, 10*time.Second) {
+			log.Fatalf("自动重启：等待端口 %d 释放超时，请手动启动", *port)
+		}
+	}
+
 	health := NewHealth()
-	srv, listenPort, existing := startServer(store, health, *port, *restart)
-	if srv == nil {
+	listenPort, existing := startServer(store, health, *port, *restart)
+	if listenPort == 0 {
 		if existing != 0 {
 			fmt.Println("已有实例正在运行，直接打开它的面板。")
 			openInBrowser(fmt.Sprintf("http://127.0.0.1:%d/", existing))
@@ -116,7 +112,9 @@ func main() {
 	} else {
 		hooks, err := rec.StartHooks()
 		if err != nil {
-			log.Fatalf("安装钩子失败: %v", err)
+			// macOS 未授权"输入监控"时这是一段给用户看的多行指引，不该带 log 前缀
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
 		}
 		defer hooks.Stop()
 	}
@@ -126,8 +124,9 @@ func main() {
 	if *watchdogOff {
 		log.Println("[看门狗] 已关闭（-watchdog-off）")
 		// 发布 off 状态，托盘菜单与面板能明确显示"看门狗未运行"。
+		// 否则状态停在初始的 "ok"，会谎报"记录正常"。
 		// 看门狗 goroutine 不存在，此状态不会被后续 publish 覆盖。
-		health.swap(Health{Status: "off", Msg: "看门狗已关闭（-watchdog-off）"})
+		health.setOff()
 	} else {
 		wd := NewWatchdog(rec, health, time.Duration(*watchdogWin)*time.Second, restartAtFromEnv())
 		go wd.Run(func() { selfRestart(store, rec, listenPort) })
@@ -170,84 +169,6 @@ func flushOnce(store *Store, rec *Recorder) {
 		rec.retainPending(labels) // 写失败不吞事件，下轮重试
 		log.Println("[警告] 写入失败，事件暂存下轮重试:", err)
 	}
-}
-
-// waitPortFree 等待指定端口能被本机监听（旧实例退出即释放）；超时返回 false。
-func waitPortFree(port int, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	for time.Now().Before(deadline) {
-		ln, err := net.Listen("tcp", addr)
-		if err == nil {
-			ln.Close()
-			return true
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-	return false
-}
-
-// selfRestart 以 -restart 模式拉起新实例（跳过实例探测、接管旧端口），
-// 写掉最后一秒数据后退出本进程。cmd.Start 失败时返回，由看门狗继续降级运行。
-func selfRestart(store *Store, rec *Recorder, port int) {
-	exe, err := os.Executable()
-	if err != nil {
-		log.Printf("[自愈] 无法获取自身可执行文件路径: %v", err)
-		return
-	}
-	cmd := exec.Command(exe, restartArgs(port)...)
-	cmd.Env = append(os.Environ(), "KFM_RESTART_AT="+strconv.FormatInt(time.Now().Unix(), 10))
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_CONSOLE}
-	if err := cmd.Start(); err != nil {
-		log.Printf("[自愈] 拉起新实例失败: %v", err)
-		return
-	}
-	flushOnce(store, rec)
-	log.Printf("[自愈] 已拉起新实例（pid=%d），本进程退出", cmd.Process.Pid)
-	os.Exit(0)
-}
-
-// restartArgs 构造自动重启时的命令行：保留用户原参数，但绝不携带 -reset/-export，
-// 强制 -restart 与 -open-panel=false（避免再弹一个浏览器标签页），并把实际端口传下去。
-func restartArgs(port int) []string {
-	return restartArgsFrom(os.Args[1:], port)
-}
-
-// restartArgsFrom 是 restartArgs 的纯函数实现，便于单测。
-func restartArgsFrom(args []string, port int) []string {
-	var out []string
-	skipNext := false
-	for _, a := range args {
-		if skipNext {
-			skipNext = false
-			continue
-		}
-		switch {
-		case a == "-reset" || a == "-restart" || a == "-open-panel":
-			continue
-		case a == "-export":
-			skipNext = true
-			continue
-		}
-		if strings.HasPrefix(a, "-export=") || strings.HasPrefix(a, "-open-panel=") {
-			continue
-		}
-		out = append(out, a)
-	}
-	return append(out, "-restart", "-open-panel=false", "-port="+strconv.Itoa(port))
-}
-
-// restartAtFromEnv 读取 KFM_RESTART_AT（自动重启时旧实例注入的环境变量），无则返回零值。
-func restartAtFromEnv() time.Time {
-	s := os.Getenv("KFM_RESTART_AT")
-	if s == "" {
-		return time.Time{}
-	}
-	sec, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return time.Time{}
-	}
-	return time.Unix(sec, 0)
 }
 
 // importLegacyJSON 导入旧版 key_counts.json。只有完整导入成功才把源文件改名
@@ -327,6 +248,85 @@ func exportCSV(store *Store, path string) error {
 func fileExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && !st.IsDir()
+}
+
+// waitPortFree 等待指定端口能被本机监听（旧实例退出即释放）；超时返回 false。
+func waitPortFree(port int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	for time.Now().Before(deadline) {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			ln.Close()
+			return true
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return false
+}
+
+// selfRestart 以 -restart 模式拉起新实例（跳过实例探测、接管旧端口），
+// 写掉最后一秒数据后退出本进程。cmd.Start 失败时返回，由看门狗继续降级运行。
+func selfRestart(store *Store, rec *Recorder, port int) {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("[自愈] 无法获取自身可执行文件路径: %v", err)
+		return
+	}
+	cmd := exec.Command(exe, restartArgs(port)...)
+	cmd.Env = append(os.Environ(), "KFM_RESTART_AT="+strconv.FormatInt(time.Now().Unix(), 10))
+	detach(cmd) // 平台相关：见 restart_windows.go / restart_darwin.go
+	if err := cmd.Start(); err != nil {
+		log.Printf("[自愈] 拉起新实例失败: %v", err)
+		return
+	}
+	flushOnce(store, rec)
+	log.Printf("[自愈] 已拉起新实例（pid=%d），本进程退出", cmd.Process.Pid)
+	os.Exit(0)
+}
+
+// restartArgs 构造自动重启时的命令行：保留用户原参数，但绝不携带 -reset/-export
+// （否则重启会清库或直接导出退出），强制 -restart 与 -open-panel=false
+// （避免再弹一个浏览器标签页），并把实际端口传下去。
+func restartArgs(port int) []string {
+	return restartArgsFrom(os.Args[1:], port)
+}
+
+// restartArgsFrom 是 restartArgs 的纯函数实现，便于单测。
+func restartArgsFrom(args []string, port int) []string {
+	var out []string
+	skipNext := false
+	for _, a := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		switch {
+		case a == "-reset" || a == "-restart" || a == "-open-panel":
+			continue
+		case a == "-export":
+			skipNext = true
+			continue
+		}
+		if strings.HasPrefix(a, "-export=") || strings.HasPrefix(a, "-open-panel=") {
+			continue
+		}
+		out = append(out, a)
+	}
+	return append(out, "-restart", "-open-panel=false", "-port="+strconv.Itoa(port))
+}
+
+// restartAtFromEnv 读取 KFM_RESTART_AT（自动重启时旧实例注入的环境变量），无则返回零值。
+func restartAtFromEnv() time.Time {
+	s := os.Getenv("KFM_RESTART_AT")
+	if s == "" {
+		return time.Time{}
+	}
+	sec, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
 }
 
 // openLogAppend 打开追加日志；超过 5MB 先把旧的轮转为 .1，防止长期运行无限膨胀。
